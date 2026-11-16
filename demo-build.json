@@ -1,0 +1,7 @@
+{
+  "stage": "workspace-settings",
+  "source_digest": "c033364f4477733bea86204e799e63fbc75d3dc43186f3fa0a869c4672ec0311",
+  "html_sha256": "3fa51044f09e37027f76a9a7b64ac118273096237c2fec35e124f4b195e3a118",
+  "data": "synthetic-browser-local-only",
+  "appwrite_connection": false
+}
