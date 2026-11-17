@@ -12,6 +12,12 @@
 
 
 
+
+
+
+
+
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -373,14 +379,23 @@ async function updateWorkspace({ body, userId, tables, databaseId, tableId }) {
   const user = { $id: role, name: role === 'owner' ? 'مالك تجريبي' : 'عضو تجريبي', email: role + '@example.test' };
   const initial = { $id: 'demo-space', name: 'مساحة تجريبية', desc: 'بيانات وهمية لتجربة تعديل الاسم والوصف', ownerId: 'owner', inviteCode: 'ABC234' };
   let workspace = { ...initial };
+  const sampleTask = { id: 'demo-task', spaceId: initial.$id, title: 'مهمة تجريبية', details: 'هذه مهمة وهمية لاختبار حذف المساحة بمحتوياتها', reward: 'هدية رمزية', status: 'todo', assignees: ['member'], assigneeStatuses: { member: 'todo' } };
+  const sampleMessages = [
+    { id: 'demo-msg-1', workspaceId: initial.$id, taskId: null, senderId: 'owner', content: 'هذه رسالة تجريبية داخل المساحة', messageType: 'text', createdAt: '2026-11-17T07:00:00.000Z' },
+    { id: 'demo-msg-2', workspaceId: initial.$id, taskId: 'demo-task', senderId: 'member', content: 'هذه رسالة خاصة بالمهمة التجريبية', messageType: 'text', createdAt: '2026-11-17T07:01:00.000Z' }
+  ];
   let persistent = true;
   try {
     const saved = JSON.parse(localStorage.getItem(DATA_KEY) || 'null');
-    if (saved && saved.$id === initial.$id && typeof saved.name === 'string' && typeof saved.desc === 'string') {
+    if (saved && saved.deleted === true && saved.id === initial.$id) {
+      workspace = null; // منع عودة المساحة المحذوفة عند تحديث الصفحة.
+    } else if (saved && saved.$id === initial.$id && typeof saved.name === 'string' && typeof saved.desc === 'string') {
       workspace.name = saved.name; workspace.desc = saved.desc;
     }
-    localStorage.removeItem('fariqna-v2-pages-demo-ui-v1');
-    localStorage.setItem(DATA_KEY, JSON.stringify(workspace));
+    // مسح الحالة المحلية القديمة فقط عند بدء التجربة لأول مرة،
+    // وليس عند كل تبديل بين المالك والعضو أو تحديث للصفحة.
+    if (!saved) localStorage.removeItem('fariqna-v2-pages-demo-ui-v1');
+    localStorage.setItem(DATA_KEY, JSON.stringify(workspace || { deleted: true, id: initial.$id }));
   } catch { persistent = false; }
   window.resetDemo = () => {
     try { localStorage.removeItem(DATA_KEY); localStorage.removeItem('fariqna-v2-pages-demo-ui-v1'); } catch {}
@@ -391,10 +406,11 @@ async function updateWorkspace({ body, userId, tables, databaseId, tableId }) {
   });
   const tables = {
     async getRow({ rowId }) {
-      if (rowId !== workspace.$id) throw { code: 404 };
+      if (!workspace || rowId !== workspace.$id) throw { code: 404 };
       return { ...workspace };
     },
     async updateRow({ data }) {
+      if (!workspace) throw { code: 404 };
       const next = { ...workspace, ...data };
       if (persistent) localStorage.setItem(DATA_KEY, JSON.stringify(next));
       workspace = next;
@@ -413,13 +429,37 @@ async function updateWorkspace({ body, userId, tables, databaseId, tableId }) {
         } catch {
           result = { status: 500, body: { success: false, message: 'تعذر الحفظ في المتصفح؛ لم تتغير البيانات' } };
         }
+      } else if (body.action === 'deleteWorkspace') {
+        // محاكاة الحذف في المتصفح فقط. لا توجد أي اتصالات بخوادم خارجية.
+        if (!workspace || body.workspaceId !== workspace.$id) {
+          result = { status: 404, body: { success: false, message: 'المساحة غير موجودة' } };
+        } else if (workspace.ownerId !== user.$id) {
+          result = { status: 403, body: { success: false, message: 'مالك المساحة فقط يستطيع حذفها' } };
+        } else if (typeof body.confirmName !== 'string' || body.confirmName.trim() !== workspace.name.trim()) {
+          result = { status: 400, body: { success: false, message: 'اكتب اسم المساحة الحالي تمامًا للتأكيد' } };
+        } else {
+          try {
+            // نحتفظ بعلامة الحذف حتى لا تعود المساحة بعد تحديث الصفحة.
+            if (persistent) localStorage.setItem(DATA_KEY, JSON.stringify({ deleted: true, id: workspace.$id }));
+            const deletedId = workspace.$id;
+            workspace = null;
+            result = { status: 200, body: { success: true, workspaceId: deletedId, message: 'تم حذف البيانات التجريبية', removed: { tasks: 1, members: 2, messages: 2, attachments: 0 } } };
+          } catch {
+            result = { status: 500, body: { success: false, message: 'تعذر حفظ حالة الحذف المحلية' } };
+          }
+        }
+      } else if (body.action === 'listWorkspaces') {
+        result = { status: 200, body: { success: true, workspaces: workspace ? [{ id: workspace.$id, name: workspace.name, desc: workspace.desc, adminId: 'owner', code: role === 'owner' ? 'ABC234' : '', role: role === 'owner' ? 'admin' : 'member' }] : [] } };
+      } else if (['listMembers', 'listTasks', 'listMessages'].includes(body.action) && (!workspace || body.workspaceId !== workspace.$id)) {
+        result = { status: 404, body: { success: false, message: 'المساحة غير موجودة' } };
+      } else if (body.action === 'listMembers') {
+        result = { status: 200, body: { success: true, members: ['owner', 'member'].map(id => ({ userId: id, name: id === 'owner' ? 'مالك تجريبي' : 'عضو تجريبي', role: id === 'owner' ? 'admin' : 'member' })) } };
+      } else if (body.action === 'listTasks') {
+        result = { status: 200, body: { success: true, tasks: [{ ...sampleTask }] } };
+      } else if (body.action === 'listMessages') {
+        result = { status: 200, body: { success: true, messages: sampleMessages.filter(msg => (msg.taskId || '') === (body.taskId || '')) } };
       } else {
-        const fixtures = {
-          listWorkspaces: { workspaces: [{ id: workspace.$id, name: workspace.name, desc: workspace.desc, adminId: 'owner', code: 'ABC234', role: role === 'owner' ? 'admin' : 'member' }] },
-          listMembers: { members: ['owner', 'member'].map(id => ({ userId: id, name: id === 'owner' ? 'مالك تجريبي' : 'عضو تجريبي', role: id === 'owner' ? 'admin' : 'member' })) },
-          listTasks: { tasks: [] }, listMessages: { messages: [] }
-        };
-        result = fixtures[body.action] ? { status: 200, body: { success: true, ...fixtures[body.action] } } : { status: 403, body: { success: false, message: 'هذه النسخة مخصصة لتجربة تعديل الاسم والوصف فقط' } };
+        result = { status: 403, body: { success: false, message: 'النسخة التجريبية مخصصة لتعديل المساحة وحذفها فقط' } };
       }
       return { status: 'completed', responseStatusCode: result.status, responseBody: JSON.stringify(result.body) };
     }
@@ -447,12 +487,12 @@ async function updateWorkspace({ body, userId, tables, databaseId, tableId }) {
 </head>
 <body>
 <div style="background:#4338CA;color:white;padding:12px;text-align:center;line-height:2">
-<strong>فريقنا 2.0 — موقع تجريبي مستقل — الإضافة الأولى</strong><br>
+<strong>فريقنا 2.0 — موقع تجريبي مستقل — الإضافتان الأولى والثانية</strong><br>
 <a style="color:white" href="./index.html?role=owner">الدخول كمالك</a> ·
 <a style="color:white" href="./index.html?role=member">الدخول كعضو</a> ·
 <button type="button" onclick="resetDemo()">إعادة البيانات التجريبية</button>
-<div id="demo-storage">بيانات وهمية محفوظة في هذا المتصفح فقط، ولا تنتقل بين الأجهزة. لا يوجد اتصال بـ Appwrite.</div>
-<small>نسخة c033364f4477</small>
+<div id="demo-storage">بيانات وهمية (مساحة وعضوان ومهمة ورسالتان) محفوظة في هذا المتصفح فقط. الحذف لا يمس Appwrite ولا الموقع الأصلي. اضغط «إعادة البيانات التجريبية» لاسترجاع المساحة بعد حذفها.</div>
+<small>نسخة تجريبية: اختبار حذف المساحة v2</small>
 </div>
 
 <!-- شاشة الترحيب وتسجيل الدخول -->
@@ -544,6 +584,7 @@ async function updateWorkspace({ body, userId, tables, databaseId, tableId }) {
         <button class="btn ghost" id="show-achievements" type="button">📊 إنجاز الأعضاء</button>
         <button class="btn ghost" id="show-ranking" type="button">🏅 ترتيب الأعضاء</button>
        <button class="btn ghost" id="edit-space-btn" type="button">⚙️ إعدادات المساحة</button>
+        <button class="btn danger" id="delete-space-btn" type="button">🗑️ حذف المساحة</button>
       </div>
       <div class="invite-box" id="invite-box">
         <span class="muted">رمز الدعوة</span>
@@ -876,6 +917,13 @@ function enterApp() {
       throw new Error(result.message || "فشل استرجاع الغرف");
     }
 
+    // تنظيف المساحة المحذوفة من ذاكرة العرض عند التحديث أو تبديل الحساب.
+    if (!result.workspaces.some(function (space) { return space.id === 'demo-space'; })) {
+      db.spaces = db.spaces.filter(function (space) { return space.id !== 'demo-space'; });
+      db.members = db.members.filter(function (member) { return member.spaceId !== 'demo-space'; });
+      db.tasks = db.tasks.filter(function (task) { return task.spaceId !== 'demo-space'; });
+      if (db.syncedTaskIds) delete db.syncedTaskIds['demo-space'];
+    }
     result.workspaces.forEach(function (space) {
       var existing = db.spaces.find(function (s) {
         return s.id === space.id;
@@ -1014,6 +1062,67 @@ function enterApp() {
       }
     );
   });
+  // ---------- حذف مساحة تجريبية بجميع محتوياتها ----------
+  $('delete-space-btn').addEventListener('click', function () {
+    var space = db.spaces.find(function (item) { return item.id === state.spaceId; });
+    var member = myMembership(state.spaceId);
+    if (!space || !me() || !member || member.role !== 'admin' || space.adminId !== me().id) {
+      toast('مالك المساحة فقط يستطيع حذفها');
+      return;
+    }
+    openModal(
+      '🗑️ حذف المساحة نهائيًا',
+      '<p class="error" style="font-weight:700">سيُحذف محتوى هذه المساحة التجريبية (الأعضاء والمهام والمحادثات). لا يتأثر موقع العائلة أو Appwrite.</p>' +
+      '<p>اكتب اسم المساحة للتأكيد: <strong>' + esc(space.name) + '</strong></p>' +
+      '<label>اسم المساحة<input type="text" name="confirmName" required maxlength="40" autocomplete="off" placeholder="اكتب الاسم تمامًا"></label>',
+      async function (fd) {
+        var confirmName = String(fd.get('confirmName') || '').trim();
+        if (confirmName !== String(space.name || '').trim()) {
+          toast('الاسم الذي كتبته لا يطابق اسم المساحة');
+          return;
+        }
+        var btn = $('modal-form').querySelector('[type="submit"]');
+        if (btn.disabled) return;
+        btn.disabled = true;
+        var cancel = $('modal-cancel');
+        cancel.disabled = true;
+        try {
+          var execution = await new Appwrite.Functions(window.fariqna.client).createExecution({
+            functionId: window.fariqna.workspaceSettingsFunctionId,
+            body: JSON.stringify({ action: 'deleteWorkspace', workspaceId: space.id, confirmName: confirmName }),
+            async: false,
+            headers: { 'content-type': 'application/json' }
+          });
+          var result = JSON.parse(execution.responseBody || '{}');
+          if (execution.status === 'failed' || execution.responseStatusCode >= 400 ||
+              !result.success || result.workspaceId !== space.id) {
+            throw new Error(result.message || 'تعذر حذف المساحة');
+          }
+          db.spaces = db.spaces.filter(function (item) { return item.id !== space.id; });
+          db.members = db.members.filter(function (item) { return item.spaceId !== space.id; });
+          db.tasks = db.tasks.filter(function (item) { return item.spaceId !== space.id; });
+          if (db.syncedTaskIds) delete db.syncedTaskIds[space.id];
+          save(db);
+          closeModal();
+          state.spaceId = null;
+          state.taskChatId = null;
+          renderSpaces();
+          show('spaces');
+          toast('تم حذف المساحة التجريبية. يمكنك إعادتها من الزر أعلى الصفحة.');
+        } catch (err) {
+          toast('تعذر حذف المساحة: ' + (err.message || 'خطأ غير معروف'));
+        } finally {
+          btn.disabled = false;
+          cancel.disabled = false;
+        }
+      }
+    );
+    var submit = $('modal-form').querySelector('[type="submit"]');
+    submit.textContent = 'حذف المساحة نهائيًا';
+    submit.classList.remove('primary');
+    submit.classList.add('danger');
+  });
+
   $('new-space-btn').addEventListener('click', function () {
     openModal('مساحة جديدة', '<label>اسم المساحة<input name="name" required maxlength="40"></label>' +
       '<label>وصف مختصر<input name="desc" maxlength="120"></label>', function (fd) {
@@ -1300,6 +1409,7 @@ loadRoomMessages();
     if (!s || !m) { renderSpaces(); show('spaces'); return; }
     var isAdmin = m.role === 'admin';
     $('edit-space-btn').classList.toggle('hidden', !me() || s.adminId !== me().id);
+    $('delete-space-btn').classList.toggle('hidden', !me() || s.adminId !== me().id);
     $('space-name').textContent = s.name;
     $('space-desc').textContent = s.desc || '';
     $('space-role').textContent = isAdmin ? 'مدير' : 'عضو';
@@ -2205,6 +2315,10 @@ document.addEventListener('click', async function (e) {
 </style>
 </body>
 </html>
+
+
+
+
 
 
 
