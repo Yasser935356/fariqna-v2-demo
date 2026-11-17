@@ -7,6 +7,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -493,6 +494,9 @@ textarea { resize: vertical; }
 </label>
             <fieldset class="assignees">
               <legend>تعيين إلى</legend>
+              <label class="check" id="select-all-assignees-row">
+                <input type="checkbox" id="select-all-assignees"> ✅ تحديد الكل
+              </label>
               <div id="assignee-options"></div>
             </fieldset>
      <button class="btn primary block" type="submit">🚀 إضافة المهمة</button>
@@ -1320,14 +1324,40 @@ loadRoomMessages();
     $('new-task-panel').classList.toggle('hidden', !isAdmin);
     $('admin-report-actions').classList.toggle('hidden', !isAdmin);
 
-    var opts = db.members.filter(function (x) { return x.spaceId === s.id; }).map(function (x) {
+    // قائمة التكليف تخص الأعضاء فقط؛ لا يظهر مدير المساحة فيها.
+    var availableAssignees = db.members.filter(function (x) {
+      return x.spaceId === s.id && x.role !== 'admin' && x.userId !== s.adminId;
+    });
+    var opts = availableAssignees.map(function (x) {
       var u = db.users.find(function (y) { return y.id === x.userId; });
-      return '<label class="check"><input type="checkbox" name="assignee" value="' + x.userId + '"> ' + esc(u ? u.name : '') + '</label>';
+      return '<label class="check"><input type="checkbox" name="assignee" value="' + esc(x.userId) + '"> ' + esc(u ? u.name : 'عضو') + '</label>';
     }).join('');
-    $('assignee-options').innerHTML = opts;
+    $('assignee-options').innerHTML = opts || '<p class="muted">لا يوجد أعضاء لتعيين المهمة عليهم بعد.</p>';
+    $('select-all-assignees-row').classList.toggle('hidden', availableAssignees.length === 0);
+    $('select-all-assignees').checked = false;
+    $('select-all-assignees').indeterminate = false;
+    $('select-all-assignees').disabled = availableAssignees.length === 0;
 
     renderTasks(); renderMembers();
   }
+
+  // تحديد/إلغاء تحديد جميع الأعضاء الموجودين في قائمة التكليف.
+  $('select-all-assignees').addEventListener('change', function () {
+    var selectAll = this;
+    $('assignee-options').querySelectorAll('input[name="assignee"]').forEach(function (box) {
+      box.checked = selectAll.checked;
+    });
+    selectAll.indeterminate = false;
+  });
+  // تحديث حالة "تحديد الكل" عند اختيار عضو واحد أو إلغاء اختياره.
+  $('assignee-options').addEventListener('change', function (event) {
+    if (!event.target.matches('input[name="assignee"]')) return;
+    var boxes = Array.from(this.querySelectorAll('input[name="assignee"]'));
+    var checkedCount = boxes.filter(function (box) { return box.checked; }).length;
+    var selectAll = $('select-all-assignees');
+    selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+    selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+  });
 
   // ---------- الحالة المستقلة لكل عضو ----------
   function memberTaskStatus(task,userId) {
@@ -1527,6 +1557,19 @@ if (dueAtInput) {
       return input.value;
     }
   );
+  // دفاع إضافي في الواجهة؛ Appwrite يجب أن يمنع تكليف المدير أيضًا.
+  var currentSpace = db.spaces.find(function (space) { return space.id === state.spaceId; });
+  var forbiddenAssignee = assignees.some(function (userId) {
+    var member = db.members.find(function (item) {
+      return item.spaceId === state.spaceId && item.userId === userId;
+    });
+    return userId === me().id || (currentSpace && userId === currentSpace.adminId) ||
+      !member || member.role === 'admin';
+  });
+  if (forbiddenAssignee) {
+    toast('يُسمح بتعيين الأعضاء فقط، ولا يمكن تعيين المدير');
+    return;
+  }
 
   if (!title || title.length > 120 || description.length > 1000) {
     toast('تحقق من عنوان المهمة وتفاصيلها');
