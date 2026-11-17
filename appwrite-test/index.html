@@ -7,7 +7,6 @@
 
 
 
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -319,6 +318,20 @@ textarea { resize: vertical; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
+
+/* فريقنا 2.0 — نظام تسليم المهام */
+.submission-panel { margin-top: 12px; padding: 12px 14px; background: #f7f5ff; border: 1px solid #e6e0fa; border-radius: 12px; }
+.submission-panel h5 { margin: 0 0 8px; font-size: 14px; }
+.submission-entry { border-top: 1px solid #e6e0fa; padding: 10px 0; }
+.submission-entry:first-of-type { border-top: 0; }
+.submission-entry .btn { margin: 5px 0 0 8px; white-space: normal; }
+.submission-meta { color: #6b7780; font-size: 13px; }
+.submission-pill { display: inline-block; padding: 3px 9px; font-size: 12px; border-radius: 999px; background: #ede9fe; color: #4338ca; font-weight: 700; }
+.submission-pill.pending { background: #fff0c2; color: #8a5800; }
+.submission-pill.approved { background: #d7f5e4; color: #176044; }
+.submission-pill.returned { background: #ffe1dd; color: #a23c31; }
+.submission-note { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#modal .modal-card { max-height: 90vh; overflow-y: auto; }
 </style>
   <script src="https://cdn.jsdelivr.net/npm/appwrite@29.0.0"></script>
 <script>
@@ -1380,12 +1393,16 @@ loadRoomMessages();
         var u=db.users.find(function(x){return x.id===id;});return u?u.name:'عضو';
       }).join('، ')||'غير معيّنة';
       var isAssigned=assignees.includes(me().id);
-      var canChange=isAssigned||(isAdmin&&assignees.length===0);
+      var mySubmission=task.submissions && task.submissions[me().id] || {status:'none'};
+      var submissionLocked=['pending','approved'].includes(mySubmission.status);
+      // لا يمكن للعضو إكمال المهمة من زر الحالة؛ يعتمدها المدير بعد تسليمها.
+      var canChange=(isAssigned&&!submissionLocked)||(isAdmin&&assignees.length===0);
       var canChat=isAssigned||isAdmin;
       var personalStatus=isAssigned?memberTaskStatus(task,me().id):task.status;
-      var buttons=Object.keys(STATUS).map(function(code){
-        return '<button class="status-btn '+code+(personalStatus===code?' on':'')+'" data-id="'+esc(task.id)+'" data-status="'+code+'"'+(canChange?'':' disabled')+'>'+STATUS[code]+'</button>';
-      }).join('');
+      var selectableStatuses=(isAdmin&&assignees.length===0)?Object.keys(STATUS):['todo','doing'];
+      var buttons=canChange ? selectableStatuses.map(function(code){
+        return '<button class="status-btn '+code+(personalStatus===code?' on':'')+'" data-id="'+esc(task.id)+'" data-status="'+code+'">'+STATUS[code]+'</button>';
+      }).join('') : '<span class="muted">الحالة: '+esc(STATUS[personalStatus]||'قيد التنفيذ')+'</span>';
       var dueInfo='';
       if(task.dueAt){
         var dueDate=new Date(task.dueAt);
@@ -1404,8 +1421,33 @@ loadRoomMessages();
         '<div class="task-meta"><span>المعيّنون: '+esc(names)+'</span>'+dueInfo+
         (task.reward?'<span>🎁 مكافأة المهمة: '+esc(task.reward)+'</span>':'')+'</div>'+
         progress+'<div class="task-row"><div class="status-group">'+buttons+'</div>'+
-        (isAdmin?'<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>'+
-        (!canChange&&assignees.length?'<small class="muted">تغيير الحالة متاح لكل عضو مكلّف بحسابه فقط.</small>':'');
+        (isAdmin?'<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
+      // أعضاء المهمة يشاهدون حالة تسليمهم؛ المدير يرى تسليمات جميع المكلّفين.
+      var subPanel=document.createElement('div');
+      subPanel.className='submission-panel';
+      if (isAdmin && assignees.length) {
+        subPanel.innerHTML='<h5>📥 تسليمات الأعضاء</h5>';
+        assignees.forEach(function(assignedId){
+          var member=db.users.find(function(u){return u.id===assignedId;});
+          var sub=(task.submissions && task.submissions[assignedId])||{status:'none'};
+          var row=document.createElement('div');
+          row.className='submission-entry';
+          row.innerHTML='<strong>'+esc(member?member.name:'عضو')+'</strong> '+submissionStatusPill(sub.status)+
+            (sub.submittedAt?'<div class="submission-meta">وقت التسليم: '+esc(formatSubmissionDate(sub.submittedAt))+'</div>':'')+
+            (sub.status==='pending'?'<div><button class="btn primary small" type="button" data-review-task="'+esc(task.id)+'" data-review-user="'+esc(assignedId)+'">مراجعة التسليم</button></div>':'');
+          subPanel.appendChild(row);
+        });
+        el.appendChild(subPanel);
+      } else if(isAssigned && !isAdmin) {
+        var myRow=document.createElement('div');
+        myRow.innerHTML='<h5>📤 تسليم المهمة</h5>'+submissionStatusPill(mySubmission.status)+
+          (mySubmission.submittedAt?'<div class="submission-meta">آخر تسليم: '+esc(formatSubmissionDate(mySubmission.submittedAt))+'</div>':'')+
+          (mySubmission.text?'<p class="submission-note">'+esc(mySubmission.text)+'</p>':'')+
+          (mySubmission.attachmentId?'<button class="btn ghost small" type="button" data-submission-file-task="'+esc(task.id)+'" data-submission-file-user="'+esc(me().id)+'">📎 فتح المرفق المسلّم</button>':'')+
+          (!submissionLocked?'<div><button type="button" class="btn primary small" data-submit-task="'+esc(task.id)+'">'+(mySubmission.status==='returned'?'إعادة التسليم':'تسليم المهمة')+'</button></div>':'');
+        subPanel.appendChild(myRow);
+        el.appendChild(subPanel);
+      }
       if(canChat){
         var chatBtn=document.createElement('button');
         chatBtn.type='button';chatBtn.className='btn ghost small';
@@ -1417,12 +1459,180 @@ loadRoomMessages();
     $('tasks-empty').classList.toggle('hidden',tasks.length>0);
   }
 
+  // ---------- تسليم المهام ومراجعة المدير ----------
+  var SUBMISSION_STATES={none:'لم يتم التسليم',pending:'بانتظار اعتماد المدير',approved:'معتمدة',returned:'أعيدت للتعديل'};
+  function submissionStatusPill(status){
+    var value=Object.prototype.hasOwnProperty.call(SUBMISSION_STATES,status)?status:'none';
+    return '<span class="submission-pill '+value+'">'+SUBMISSION_STATES[value]+'</span>';
+  }
+  function formatSubmissionDate(iso){
+    var date=new Date(iso);
+    return Number.isNaN(date.getTime())?'—':date.toLocaleString('ar-SA-u-ca-gregory',{dateStyle:'medium',timeStyle:'short'});
+  }
+  async function submissionAction(payload){
+    var f=new Appwrite.Functions(window.fariqna.client);
+    var execution=await f.createExecution({
+      functionId:'6afc936d003ba906e93f',body:JSON.stringify(payload),async:false,
+      headers:{'content-type':'application/json'}
+    });
+    var result={};
+    try { result=JSON.parse(execution.responseBody||'{}'); } catch(_){ /* server failure */ }
+    if(execution.status==='failed'||execution.responseStatusCode>=400||!result.success){
+      throw new Error(result.message||'تعذر تنفيذ الطلب، راجع عمليات التنفيذ في Appwrite');
+    }
+    return result;
+  }
+  function validateSubmissionFile(file){
+    if(!file)return;
+    var types={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',gif:'image/gif',pdf:'application/pdf'};
+    var ext=String(file.name||'').split('.').pop().toLowerCase();
+    if(!Object.prototype.hasOwnProperty.call(types,ext)|| (file.type && file.type!==types[ext])){
+      throw new Error('يُسمح بصورة JPG أو PNG أو WEBP أو GIF، أو ملف PDF فقط');
+    }
+    var limit=(ext==='pdf'?50:20)*1024*1024;
+    if(file.size<1||file.size>limit)throw new Error(ext==='pdf'?'حجم PDF يجب ألا يتجاوز 50MB':'حجم الصورة يجب ألا يتجاوز 20MB');
+  }
+  async function uploadSubmissionFile(file){
+    // حماية ضد رفع ملفات حقيقية إلى مشروع العائلة بالخطأ.
+    if(window.fariqna.projectId!=='6af8cf5a001f4720fe19')throw new Error('التسليم متاح في بيئة الاختبار فقط الآن');
+    validateSubmissionFile(file);
+    var currentUser=me();
+    if(!currentUser)throw new Error('سجّل الدخول أولًا');
+    var storage=new Appwrite.Storage(window.fariqna.client);
+    return await storage.createFile({
+      bucketId:'fariqna-v2-files',fileId:window.fariqna.ID.unique(),file:file,
+      permissions:[Appwrite.Permission.read(Appwrite.Role.user(currentUser.id)),Appwrite.Permission.delete(Appwrite.Role.user(currentUser.id))]
+    });
+  }
+  async function refreshAfterSubmission(){
+    if(state.spaceId){
+      await refreshTasks(state.spaceId,false);
+      renderTasks();
+      renderMembers();
+    }
+  }
+
+  // استدعاء أزرار التسليم والمراجعة، دون التأثير على أزرار المحادثة أو الحذف.
+  $('tasks-list').addEventListener('click',function(e){
+    var submit=e.target.closest('[data-submit-task]');
+    if(submit){
+      var task=db.tasks.find(function(t){return t.id===submit.dataset.submitTask&&t.spaceId===state.spaceId;});
+      var user=me(), membership=myMembership(state.spaceId);
+      if(!task||!user||membership?.role==='admin'||!canViewTask(task)||!(task.assignees||[]).includes(user.id)){
+        toast('التسليم متاح للعضو المكلّف فقط');return;
+      }
+      var existing=(task.submissions&&task.submissions[user.id])||{status:'none'};
+      if(['pending','approved'].includes(existing.status)){toast('هذا التسليم قيد المراجعة أو معتمد');return;}
+      openModal(existing.status==='returned'?'إعادة تسليم المهمة':'📤 تسليم المهمة',
+        '<p class="muted">'+esc(task.title)+'</p>'+
+        '<label>ملخص الإنجاز (اختياري إذا أرفقت ملفًا)<textarea name="submissionText" rows="4" maxlength="2000" placeholder="ما الذي أنجزته؟"></textarea></label>'+
+        '<label>📎 صورة حتى 20MB أو PDF حتى 50MB (اختياري إذا كتبت ملخصًا)<input name="submissionFile" type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.pdf"></label>'+
+        '<small class="muted">بعد التسليم، سيراجع المدير العمل ثم يعتمده أو يرجعه للتعديل.</small>',
+        async function(fd){
+          var textValue=String(fd.get('submissionText')||'').trim();
+          var form=$('modal-form'), input=form.querySelector('input[name="submissionFile"]');
+          var file=input&&input.files[0];
+          if(!textValue&&!file){toast('اكتب ملخصًا أو اختر مرفقًا');return;}
+          if(textValue.length>2000){toast('الملخص طويل جدًا');return;}
+          try{validateSubmissionFile(file);}catch(err){toast(err.message);return;}
+          var button=form.querySelector('[type="submit"]');
+          if(button.disabled)return;
+          button.disabled=true;
+          var uploaded=null;
+          try{
+            if(file)uploaded=await uploadSubmissionFile(file);
+            var result=await submissionAction({
+              action:'submitTask',taskId:task.id,submissionText:textValue,
+              fileId:uploaded?uploaded.$id:''
+            });
+            // تحديث محلي سريع، ثم جلب الحالة الرسمية من Appwrite.
+            task.submissions=task.submissions||{};
+            task.submissions[user.id]=result.submission;
+            task.status=result.status||task.status;
+            closeModal();
+            renderTasks();
+            toast('تم التسليم، بانتظار مراجعة المدير');
+            await refreshAfterSubmission();
+          }catch(err){
+            toast('تعذر تسليم المهمة: '+err.message);
+          }finally{button.disabled=false;}
+        }
+      );
+      return;
+    }
+    var review=e.target.closest('[data-review-task]');
+    if(review){
+      var task=db.tasks.find(function(t){return t.id===review.dataset.reviewTask&&t.spaceId===state.spaceId;});
+      var membership=myMembership(state.spaceId), user=me();
+      var assigneeId=review.dataset.reviewUser;
+      if(!task||!user||membership?.role!=='admin'||!task.assignees?.includes(assigneeId)){
+        toast('مراجعة التسليم متاحة للمدير فقط');return;
+      }
+      var sub=task.submissions&&task.submissions[assigneeId];
+      if(!sub||sub.status!=='pending'){toast('لا يوجد تسليم قيد المراجعة');return;}
+      var member=db.users.find(function(u){return u.id===assigneeId;});
+      openModal('📥 مراجعة تسليم '+(member?member.name:'العضو'),
+        '<p>المهمة: <strong>'+esc(task.title)+'</strong></p>'+
+        '<p class="submission-meta">تاريخ التسليم: '+esc(formatSubmissionDate(sub.submittedAt))+'</p>'+
+        '<p class="submission-note">'+esc(sub.text||'لا يوجد ملخص مكتوب')+'</p>'+
+        (sub.attachmentId?'<button class="btn ghost small" type="button" data-submission-file-task="'+esc(task.id)+'" data-submission-file-user="'+esc(assigneeId)+'">📎 عرض ملف التسليم</button>':'')+
+        '<label>القرار<select name="decision" required><option value="approve">✅ اعتماد التسليم</option><option value="return">↩️ إرجاع للتعديل</option></select></label>',
+        async function(fd){
+          var decision=String(fd.get('decision')||'');
+          if(!['approve','return'].includes(decision))return;
+          var button=$('modal-form').querySelector('[type="submit"]');
+          if(button.disabled)return;
+          button.disabled=true;
+          try{
+            var result=await submissionAction({action:'reviewTaskSubmission',taskId:task.id,assigneeId:assigneeId,decision:decision});
+            task.submissions[assigneeId].status=result.submissionStatus;
+            task.assigneeStatuses=task.assigneeStatuses||{};
+            task.assigneeStatuses[assigneeId]=decision==='approve'?'done':'doing';
+            task.status=result.status||task.status;
+            closeModal();renderTasks();renderMembers();
+            toast(decision==='approve'?'تم اعتماد التسليم':'أُعيدت المهمة للعضو للتعديل');
+            await refreshAfterSubmission();
+          }catch(err){toast('تعذر مراجعة التسليم: '+err.message);}
+          finally{button.disabled=false;}
+        }
+      );
+    }
+  });
+  // المرفقات لا تفتح إلا بعد جلب رابط مؤقت من الخادم وبعد فحص صلاحيات المستخدم.
+  document.addEventListener('click',async function(e){
+    var button=e.target.closest('[data-submission-file-task]');
+    if(!button||button.disabled)return;
+    var preview=window.open('about:blank','_blank');
+    if(!preview){toast('اسمح بفتح النافذة المنبثقة لعرض الملف');return;}
+    preview.document.body.textContent='جارٍ فتح المرفق...';
+    button.disabled=true;
+    try{
+      var result=await submissionAction({
+        action:'getSubmissionAttachmentLink',taskId:button.dataset.submissionFileTask,
+        assigneeId:button.dataset.submissionFileUser
+      });
+      var url=new URL(result.fileUrl);
+      if(url.protocol!=='https:'||url.origin!=='https://fra.cloud.appwrite.io')throw new Error('رابط الملف غير موثوق');
+      preview.location.replace(result.fileUrl);
+    }catch(err){preview.close();toast('تعذر فتح الملف: '+err.message);}
+    finally{button.disabled=false;}
+  });
+
 $('tasks-list').addEventListener('click', async function (e) {
     var sb = e.target.closest('[data-status]');
     if (sb && !sb.disabled) {
       var t = db.tasks.find(function (x) { return x.id === sb.dataset.id; });
       if (!t || !canViewTask(t)) return;
     var newStatus = sb.dataset.status;
+    if (newStatus === 'done' && Array.isArray(t.assignees) && t.assignees.length) {
+      toast('إكمال المهمة يكون بالتسليم واعتماد المدير');
+      return;
+    }
+    if (t.submissions && t.submissions[me().id] &&
+        ['pending','approved'].includes(t.submissions[me().id].status)) {
+      toast('لا يمكن تغيير حالة مهمة تنتظر اعتماد المدير أو تم اعتمادها');
+      return;
+    }
     sb.disabled = true;
 
     try {
