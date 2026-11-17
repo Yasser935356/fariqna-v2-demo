@@ -3,17 +3,19 @@
 
 
 
+
+
+
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>فريقنا 2.0 — بيئة اختبار</title>
+<title>فريقنا 2.0 — اختبار خصوصية المهام</title>
 <meta name="theme-color" content="#5B4FE8">
 <meta name="description" content="فريقنا لتنظيم المهام الجماعية والمحادثات والإنجازات">
-<!-- لا يوجد تثبيت في النسخة التجريبية -->
-
-
+<!-- نسخة اختبار فقط: بدون تثبيت على الجهاز -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap">
 <style>/* inlined style.css */
@@ -398,8 +400,8 @@ textarea { resize: vertical; }
   <span class="welcome-rocket">🚀</span>
   <span class="welcome-sparkle">✨⭐</span>
 </div>
-  <h2>🧪 فريقنا 2.0 — بيئة اختبار</h2>
-  <p>هذه النسخة تستخدم مشروع Appwrite تجريبيًا منفصلًا، فلا تستخدم فيها بيانات العائلة الحقيقية.</p>
+  <h2>🧪 فريقنا 2.0 — اختبار</h2>
+  <p>هذه نسخة تجريبية مستقلة، لا تستخدم فيها بيانات العائلة الحقيقية.</p>
 </div>
     <div id="spaces-list" class="grid"></div>
     <p id="spaces-empty" class="empty hidden">لا توجد مساحات بعد. أنشئ مساحة جديدة أو انضم إلى مساحة بالرمز.</p>
@@ -578,9 +580,18 @@ textarea { resize: vertical; }
   }
   function save(db) {
     memory.db = db;
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* يبقى في الذاكرة */ }
+    try {
+      // حماية خصوصية المهام: تحفظ في الذاكرة أثناء الجلسة فقط، وتُسترجع من Appwrite.
+      // عدم تخزين المهام على الجهاز يمنع ظهور بيانات جلسة سابقة بعد تغيير الحساب.
+      var persisted = Object.assign({}, db, { tasks: [], syncedTaskIds: {} });
+      localStorage.setItem(KEY, JSON.stringify(persisted));
+    } catch (e) { /* يبقى في الذاكرة */ }
   }
   var db = load();
+  // تنظيف أي مهام سبق تخزينها بواسطة النسخة القديمة قبل تسجيل الدخول.
+  db.tasks = [];
+  db.syncedTaskIds = {};
+  save(db);
 
   function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
   function code() {
@@ -626,6 +637,16 @@ textarea { resize: vertical; }
     var u = me();
     return u ? db.members.find(function (m) { return m.spaceId === spaceId && m.userId === u.id; }) : null;
   }
+
+  // هذه حماية عرض إضافية. الصلاحية الأساسية يجب فرضها أيضًا في وظيفة Appwrite.
+  function canViewTask(task) {
+    var user = me();
+    if (!user || !task || !task.spaceId) return false;
+    var membership = myMembership(task.spaceId);
+    if (!membership) return false;
+    if (membership.role === 'admin') return true;
+    return Array.isArray(task.assignees) && task.assignees.includes(user.id);
+  }
   function openModal(title, html, onSubmit) {
     $('modal-title').textContent = title;
     var f = $('modal-form');
@@ -651,6 +672,9 @@ textarea { resize: vertical; }
   var account = window.fariqna.account;
 
   function saveUser(appUser) {
+    // لا نعرض مهامًا مخزنة من جلسة سابقة قبل فحص الصلاحيات على الخادم.
+    db.tasks = [];
+    db.syncedTaskIds = {};
     var user = {
       id: appUser.$id,
       name: appUser.name,
@@ -727,6 +751,8 @@ textarea { resize: vertical; }
     try {
       await account.deleteSession({ sessionId: 'current' });
        db.session = null;
+       db.tasks = [];
+       db.syncedTaskIds = {};
       save(db);
       show('auth');
     } catch (err) {
@@ -1196,10 +1222,11 @@ loadRoomMessages();
 
 }
 
-  // ---------- تحديث المهام من Appwrite دون خسارة البيانات المحلية ----------
+  // ---------- تحديث المهام من Appwrite مع منع عرض/تخزين مهام الآخرين ----------
   var taskRefreshRunning = {};
   async function refreshTasks(workspaceId, silent) {
-    if (!workspaceId || taskRefreshRunning[workspaceId]) return;
+    var viewer = me();
+    if (!workspaceId || !viewer || taskRefreshRunning[workspaceId]) return;
     taskRefreshRunning[workspaceId] = true;
     try {
       var functions = new Appwrite.Functions(window.fariqna.client);
@@ -1208,27 +1235,48 @@ loadRoomMessages();
         body: JSON.stringify({action:"listTasks",workspaceId:workspaceId}),
         async:false,headers:{"content-type":"application/json"}
       });
+      // تجاهل نتيجة طلبٍ بدأ من حساب مختلف أو انتهت جلسته.
+      if (!me() || me().id !== viewer.id) return;
       var result=JSON.parse(execution.responseBody||"{}");
       if (!result.success || !Array.isArray(result.tasks)) {
         throw new Error(result.message||"تعذر استرجاع المهام");
       }
-      if (!db.syncedTaskIds) db.syncedTaskIds={};
-      var previousIds=db.syncedTaskIds[workspaceId]||[];
-      var currentIds=result.tasks.map(function(t){return t.id;});
-      // لا نحذف ما لم نتمكن من جلب جميع المهام؛ الخادم يعيد حتى 100 مهمة.
-      if (result.tasks.length<100) {
-        db.tasks=db.tasks.filter(function(t){
-          if(t.spaceId!==workspaceId)return true;
-          if(!previousIds.includes(t.id))return true;
+      var membership = myMembership(workspaceId);
+      if (!membership) throw new Error('ليس لديك صلاحية لعرض مهام هذه المساحة');
+
+      // احتياط في الواجهة: لا نخزن مهمة لا يحق للمستخدم رؤيتها،
+      // حتى لو أرجعها خادم قديم. يلزم تأمين الاستجابة من الخلفية أيضًا.
+      var visibleTasks = result.tasks.filter(function(t) {
+        return t && t.spaceId === workspaceId && canViewTask(t);
+      });
+      if (!db.syncedTaskIds) db.syncedTaskIds = {};
+      var currentIds = visibleTasks.map(function(t){return t.id;});
+      if (membership.role !== 'admin' || visibleTasks.length < 100) {
+        // للعضو: نظّف كل المهام القديمة لتشمل سحب التكليف أو إخفاء المهمة.
+        // للمدير: يتم ذلك عندما نعلم أن القائمة ليست مقتطعة عند حد 100.
+        db.tasks = db.tasks.filter(function(t){return t.spaceId !== workspaceId;});
+      } else {
+        // توافق مع حد Appwrite الحالي عند وجود أكثر من 100 مهمة للمدير.
+        var previousIds = db.syncedTaskIds[workspaceId] || [];
+        db.tasks = db.tasks.filter(function(t){
+          if (t.spaceId !== workspaceId) return true;
+          if (!previousIds.includes(t.id)) return true;
           return currentIds.includes(t.id);
         });
       }
-      db.syncedTaskIds[workspaceId]=currentIds;
-      result.tasks.forEach(function(remoteTask){
+      db.syncedTaskIds[workspaceId] = currentIds;
+      visibleTasks.forEach(function(remoteTask){
         var old=db.tasks.find(function(t){return t.id===remoteTask.id;});
         if(old) Object.assign(old, remoteTask);
         else db.tasks.push(Object.assign({completedBy:null},remoteTask));
       });
+      // لو ألغي تكليف العضو وهو فاتح محادثة المهمة، تُغلق فور التحديث.
+      if (state.spaceId === workspaceId && state.taskChatId &&
+          !db.tasks.some(function(t){return t.id===state.taskChatId && canViewTask(t);})) {
+        $('task-chat-modal').classList.add('hidden');
+        $('task-chat-messages').textContent = '';
+        state.taskChatId = null;
+      }
       save(db);
       if (state.spaceId===workspaceId) {
         if (state.view==='space') {renderTasks();renderMembers();}
@@ -1289,7 +1337,8 @@ loadRoomMessages();
   }
   function renderTasks() {
     var spaceId=state.spaceId;
-    var tasks=db.tasks.filter(function(t){return t.spaceId===spaceId;})
+    // يجب تصفية المهام قبل إنشاء البطاقات؛ لا تظهر غير المعيّنة حتى للحظة.
+    var tasks=db.tasks.filter(function(t){return t.spaceId===spaceId && canViewTask(t);})
       .filter(function(t){return state.filter==='all'||t.status===state.filter;});
     var membership=myMembership(spaceId);
     var isAdmin=!!(membership&&membership.role==='admin');
@@ -1342,7 +1391,7 @@ $('tasks-list').addEventListener('click', async function (e) {
     var sb = e.target.closest('[data-status]');
     if (sb && !sb.disabled) {
       var t = db.tasks.find(function (x) { return x.id === sb.dataset.id; });
-      if (!t) return;
+      if (!t || !canViewTask(t)) return;
     var newStatus = sb.dataset.status;
     sb.disabled = true;
 
@@ -1545,6 +1594,9 @@ dueAt: dueAt
   function renderMembers() {
     var ul=$('members-list');
     ul.innerHTML='';
+    var viewer = me();
+    var membership = myMembership(state.spaceId);
+    var isAdmin = !!(membership && membership.role === 'admin');
     db.members.filter(function(m){return m.spaceId===state.spaceId;}).forEach(function(m){
       var u=db.users.find(function(x){return x.id===m.userId;});
       if(!u)return;
@@ -1553,8 +1605,11 @@ dueAt: dueAt
           (t.assignees||[]).includes(u.id) && memberTaskStatus(t,u.id)==='done';
       }).length;
       var li=document.createElement('li');
+      // العضو غير المدير لا يحصل على إحصاءات مهام زملائه المخفية.
+      var stat = isAdmin || (viewer && viewer.id === m.userId)
+        ? completed + ' مكتملة' : 'عضو';
       li.innerHTML='<div class="member-info"><span class="avatar">'+esc(u.name.charAt(0))+'</span><span>'+esc(u.name)+'</span></div>'+
-        '<span class="stat">'+(m.role==='admin'?'👑 مدير • ':'')+completed+' مكتملة</span>';
+        '<span class="stat">'+(m.role==='admin'?'👑 مدير • ':'')+stat+'</span>';
       ul.appendChild(li);
     });
   }
@@ -1878,8 +1933,7 @@ $('tasks-list').addEventListener('click', function (e) {
   var membership = myMembership(state.spaceId);
   var isAdmin = membership && membership.role === 'admin';
 
-  if (!task || !user ||
-      (!isAdmin && !(task.assignees || []).includes(user.id))) {
+  if (!task || !user || !canViewTask(task)) {
     toast('ليس لديك صلاحية لفتح محادثة هذه المهمة');
     return;
   }
@@ -2080,6 +2134,8 @@ document.addEventListener('click', async function (e) {
   enterApp();
 }).catch(function () {
   db.session = null;
+  db.tasks = [];
+  db.syncedTaskIds = {};
   save(db);
   show('auth');
 });
@@ -2152,6 +2208,11 @@ document.addEventListener('click', async function (e) {
 
 
 
+
+
+
+
+Picked up draggable item sidebar-section:pinned.
 
 
 
