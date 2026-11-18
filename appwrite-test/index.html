@@ -6,7 +6,6 @@
 
 
 
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -441,6 +440,7 @@ textarea { resize: vertical; }
       <div class="head-buttons hidden" id="admin-report-actions">
         <button class="btn ghost" id="show-achievements" type="button">📊 إنجاز الأعضاء</button>
         <button class="btn ghost" id="show-ranking" type="button">🏅 ترتيب الأعضاء</button>
+        <button class="btn ghost" id="show-rewards" type="button">🎁 مكافآت الأعضاء</button>
        <button class="btn ghost" id="edit-space-btn" type="button">⚙️ إعدادات المساحة</button>
        <button class="btn danger" id="delete-space-btn" type="button">🗑️ حذف المساحة</button>
       </div>
@@ -536,8 +536,16 @@ textarea { resize: vertical; }
 <section id="ranking-screen" class="screen report-screen">
   <header class="topbar"><div class="brand-small"><button class="btn ghost" type="button" data-back-to-space>↩️ رجوع للغرفة</button><strong>🏅 ترتيب الأعضاء</strong></div></header>
   <main class="container">
-    <div class="report-hero"><h2>🏅 ترتيب الأعضاء</h2><p>الترتيب حسب عدد المهام التي أنجزها كل عضو بشكل مستقل.</p></div>
+    <div class="report-hero"><h2>🏅 ترتيب الأعضاء</h2><p>الترتيب حسب عدد المهام التي اعتمد المدير تسليمها لكل عضو، وليس سرعة الإنجاز.</p></div>
     <div id="ranking-content" class="ranking-items"></div>
+  </main>
+</section>
+<section id="rewards-screen" class="screen report-screen">
+  <header class="topbar"><div class="brand-small"><button class="btn ghost" type="button" data-back-to-space>↩️ رجوع للغرفة</button><strong>🎁 مكافآت الأعضاء</strong></div></header>
+  <main class="container">
+    <div class="report-hero"><h2>🎁 مكافآت الأعضاء</h2><p>المكافآت المستحقة عن التسليمات التي اعتمدها المدير فقط، لكل عضو على حدة.</p></div>
+    <div id="rewards-content" class="ranking-items"></div>
+    <p class="muted" style="padding:12px 2px">تُجمع المبالغ المالية والنقاط كلٌّ على حدة. أما المكافآت المكتوبة كهدايا فتظهر بالاسم ولا تُحسب كمبلغ مالي.</p>
   </main>
 </section>
 
@@ -637,10 +645,10 @@ textarea { resize: vertical; }
     toast._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
   }
   function show(view) {
-    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen'].forEach(function (id) {
+    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen'].forEach(function (id) {
       $(id).classList.remove('active');
     });
-    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen' };
+    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen' };
     $(map[view]).classList.add('active');
     state.view = view;
     if (view !== 'space') {
@@ -1299,6 +1307,7 @@ loadRoomMessages();
         if (state.view==='space') {renderTasks();renderMembers();}
         if (state.view==='achievements') renderAchievements();
         if (state.view==='ranking') renderRanking();
+        if (state.view==='rewards') renderRewards();
       }
       if(state.view==='spaces')renderSpaces();
     } catch(err) {
@@ -1855,7 +1864,7 @@ dueAt: dueAt
       if(!u)return;
       var completed=db.tasks.filter(function(t){
         return t.spaceId===state.spaceId &&
-          (t.assignees||[]).includes(u.id) && memberTaskStatus(t,u.id)==='done';
+          (t.assignees||[]).includes(u.id) && isApprovedFor(t,u.id);
       }).length;
       var li=document.createElement('li');
       // العضو غير المدير لا يحصل على إحصاءات مهام زملائه المخفية.
@@ -1866,10 +1875,27 @@ dueAt: dueAt
       ul.appendChild(li);
     });
   }
-  // ---------- صفحات المدير للإنجازات والترتيب ----------
+  // ---------- تقارير المدير: تسليمات معتمدة فقط ----------
   function canViewReports(){
     var m=myMembership(state.spaceId);
-    return !!(m&&m.role==='admin');
+    return !!(m && m.role==='admin');
+  }
+  function isApprovedFor(task, userId){
+    return !!(task.submissions && task.submissions[userId] &&
+      task.submissions[userId].status === 'approved');
+  }
+  function membersForReports(){
+    return db.members.filter(function(m){
+      return m.spaceId===state.spaceId && m.role!=='admin';
+    }).map(function(m){
+      var u=db.users.find(function(x){return x.id===m.userId;});
+      return {id:m.userId,name:u?u.name:'عضو'};
+    });
+  }
+  function approvedTasksFor(userId, allTasks){
+    return allTasks.filter(function(t){
+      return (t.assignees||[]).includes(userId) && isApprovedFor(t,userId);
+    });
   }
   function renderAchievements(){
     var box=$('achievements-content');box.innerHTML='';
@@ -1881,16 +1907,18 @@ dueAt: dueAt
       var ids=task.assignees||[];
       var head=document.createElement('h3');head.textContent=task.title;div.appendChild(head);
       var summary=document.createElement('p');summary.className='muted';
-      summary.textContent='المكافأة: '+(task.reward||'—')+' • '+ids.filter(function(id){return memberTaskStatus(task,id)==='done';}).length+' / '+ids.length+' مكتملة';
+      summary.textContent='المكافأة: '+(task.reward||'—')+' • '+ids.filter(function(id){return isApprovedFor(task,id);}).length+' / '+ids.length+' معتمدة';
       div.appendChild(summary);
       var progress=document.createElement('div');progress.className='progress-list';
       if(!ids.length){progress.textContent='لم يتم تكليف أعضاء بهذه المهمة.';}
       ids.forEach(function(id){
         var u=db.users.find(function(x){return x.id===id;});
-        var status=memberTaskStatus(task,id);
+        var sub=task.submissions&&task.submissions[id];
+        var status=sub&&sub.status||'none';
+        var label={none:'لم يسلّم',pending:'بانتظار الاعتماد',approved:'معتمدة',returned:'أعيدت للتعديل'}[status]||'لم يسلّم';
         var chip=document.createElement('span');
-        chip.className='progress-pill '+status;
-        chip.textContent=(u?u.name:'عضو')+' — '+(STATUS[status]||status);
+        chip.className='progress-pill '+(status==='approved'?'done':status==='pending'?'doing':'todo');
+        chip.textContent=(u?u.name:'عضو')+' — '+label;
         progress.appendChild(chip);
       });
       div.appendChild(progress);box.appendChild(div);
@@ -1900,16 +1928,66 @@ dueAt: dueAt
     var box=$('ranking-content');box.innerHTML='';
     if(!canViewReports()){show('space');return;}
     var allTasks=db.tasks.filter(function(t){return t.spaceId===state.spaceId;});
-    var ranked=db.members.filter(function(m){return m.spaceId===state.spaceId;}).map(function(m){
-      var u=db.users.find(function(x){return x.id===m.userId;});
-      var count=allTasks.filter(function(t){return (t.assignees||[]).includes(m.userId)&&memberTaskStatus(t,m.userId)==='done';}).length;
-      return {name:u?u.name:'عضو',role:m.role,count:count};
+    var ranked=membersForReports().map(function(m){
+      return {name:m.name,count:approvedTasksFor(m.id,allTasks).length};
     }).sort(function(a,b){return b.count-a.count||a.name.localeCompare(b.name,'ar');});
     if(!ranked.length){box.innerHTML='<div class="report-empty">لا يوجد أعضاء بعد.</div>';return;}
     ranked.forEach(function(item,i){
       var medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'🏅';
       var card=document.createElement('div');card.className='ranking-card';
-      card.innerHTML='<div class="rank-head"><div class="rank-name">'+medal+' '+(i+1)+'. '+esc(item.name)+(item.role==='admin'?' <span class="badge">مدير</span>':'')+'</div><div class="rank-number">'+item.count+' ✅</div></div>';
+      card.innerHTML='<div class="rank-head"><div class="rank-name">'+medal+' '+(i+1)+'. '+esc(item.name)+'</div><div class="rank-number">'+item.count+' ✅</div></div>';
+      box.appendChild(card);
+    });
+  }
+  // مكافأة المهمة حقل نصي موجود مسبقًا؛ لا يجوز جمع هدية مع مبلغ مالي.
+  // تدعم القيم: "50 ريال" و"50 ر.س" و"50 SAR"، أو "10 نقاط"، أو اسم هدية.
+  function parseReward(raw){
+    var original=String(raw||'').trim();
+    var normalized=original.replace(/[٠-٩]/g,function(c){return String(c.charCodeAt(0)-1632);})
+      .replace(/[۰-۹]/g,function(c){return String(c.charCodeAt(0)-1776);});
+    var match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(ريال(?:ات)?|ر\.?\s*س\.?|SAR|SR|﷼)$/i);
+    if(match) return {kind:'money',amount:Number(match[1].replace(',','.')),label:original};
+    match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(نقاط?|points?)?$/i);
+    if(match) return {kind:'points',amount:Number(match[1].replace(',','.')),label:original};
+    match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(نقاط?|points?)$/i);
+    if(match) return {kind:'points',amount:Number(match[1].replace(',','.')),label:original};
+    return {kind:'gift',amount:0,label:original||'مكافأة غير محددة'};
+  }
+  function fmtAmount(n){
+    return new Intl.NumberFormat('ar-SA',{maximumFractionDigits:2}).format(n);
+  }
+  function renderRewards(){
+    var box=$('rewards-content');box.innerHTML='';
+    if(!canViewReports()){show('space');return;}
+    var allTasks=db.tasks.filter(function(t){return t.spaceId===state.spaceId;});
+    var ranked=membersForReports().map(function(member){
+      var approved=approvedTasksFor(member.id,allTasks);
+      var money=0,points=0,gifts=[];
+      approved.forEach(function(task){
+        var reward=parseReward(task.reward);
+        if(reward.kind==='money')money+=reward.amount;
+        else if(reward.kind==='points')points+=reward.amount;
+        else gifts.push({reward:reward.label,task:task.title});
+      });
+      return {name:member.name,money:money,points:points,gifts:gifts,approved:approved.length};
+    });
+    // لا نعادل الهدايا بالمبالغ. عند تعذر المقارنة، يكسر عدد المهام المعتمدة التعادل.
+    ranked.sort(function(a,b){return b.money-a.money||b.points-a.points||b.approved-a.approved||a.name.localeCompare(b.name,'ar');});
+    if(!ranked.length){box.innerHTML='<div class="report-empty">لا يوجد أعضاء بعد.</div>';return;}
+    ranked.forEach(function(item,i){
+      var medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'🏅';
+      var card=document.createElement('article');card.className='ranking-card';
+      var head=document.createElement('div');head.className='rank-head';
+      head.innerHTML='<div class="rank-name">'+medal+' '+(i+1)+'. '+esc(item.name)+'</div><span class="badge">'+item.approved+' مهام معتمدة</span>';
+      card.appendChild(head);
+      var total=document.createElement('p');total.className='rewards-totals';
+      total.textContent='💰 '+fmtAmount(item.money)+' ريال  •  ⭐ '+fmtAmount(item.points)+' نقطة  •  🎁 '+item.gifts.length+' هدايا';
+      card.appendChild(total);
+      if(item.gifts.length){
+        var info=document.createElement('p');info.className='muted';
+        info.textContent='الهدايا: '+item.gifts.map(function(g){return g.reward+' ('+g.task+')';}).join('، ');
+        card.appendChild(info);
+      }
       box.appendChild(card);
     });
   }
@@ -1920,6 +1998,10 @@ dueAt: dueAt
   $('show-ranking').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
     show('ranking');renderRanking();refreshTasks(state.spaceId,true);
+  });
+  $('show-rewards').addEventListener('click',function(){
+    if(!canViewReports())return toast('صفحة المدير فقط');
+    show('rewards');renderRewards();refreshTasks(state.spaceId,true);
   });
   document.querySelectorAll('[data-back-to-space]').forEach(function(btn){
     btn.addEventListener('click',function(){renderSpace();show('space');loadRoomMessages();});
@@ -2440,6 +2522,7 @@ document.addEventListener('click', async function (e) {
 .report-hero{background:linear-gradient(120deg,#695AF3,#8D73F2);color:#fff;border-radius:22px;padding:28px;margin-bottom:20px}
 .report-hero h2{color:#fff;font-size:27px}.report-hero p{color:#f1edff;margin:6px 0 0}
 .report-items,.ranking-items{display:flex;flex-direction:column;gap:14px}
+.rewards-totals{margin:14px 0 0;font-size:17px;font-weight:800;color:var(--primary-dark)}
 .report-card,.ranking-card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow)}
 .report-card h3{margin:0 0 12px}.report-card .muted{font-size:14px}
 .progress-list{display:flex;flex-wrap:wrap;gap:8px}
@@ -2465,7 +2548,6 @@ document.addEventListener('click', async function (e) {
 
 
 
-Picked up draggable item sidebar-section:pinned.
 
 
 
