@@ -449,7 +449,10 @@ textarea { resize: vertical; }
     <div class="layout">
       <div class="col-main">
         <div class="page-head">
-         <h3>✅ المهام</h3>
+          <div class="my-tasks-toolbar">
+            <h3 id="tasks-heading">✅ المهام</h3>
+            <button class="btn ghost small hidden" id="my-tasks-toggle" type="button" aria-pressed="false">📋 مهامي</button>
+          </div>
           <div class="filters" id="filters">
             <button class="chip active" data-filter="all">الكل</button>
             <button class="chip" data-filter="todo">لم تبدأ</button>
@@ -483,7 +486,7 @@ textarea { resize: vertical; }
 </section>
       </div>
 
-      <aside class="col-side">
+      <aside class="col-side" id="space-side-panel">
         <div class="panel" id="new-task-panel">
          <h3>📝 مهمة جديدة</h3>
           <form id="task-form" class="form">
@@ -631,7 +634,7 @@ textarea { resize: vertical; }
     });
   }
   var STATUS = { todo: 'لم تبدأ', doing: 'قيد التنفيذ', done: 'مكتملة' };
-  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null };
+  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null, myTasksView: false };
 
   function toast(msg) {
     var t = $('toast');
@@ -1175,6 +1178,7 @@ $('join-space-btn').addEventListener('click', function () {
 function openSpace(id) {
   state.spaceId = id;
   state.filter = 'all';
+  state.myTasksView = false;
 
   renderSpace();
   show('space');
@@ -1310,7 +1314,7 @@ loadRoomMessages();
     } finally { delete taskRefreshRunning[workspaceId]; }
   }
 
-  $('back-btn').addEventListener('click', function () { renderSpaces(); show('spaces'); });
+  $('back-btn').addEventListener('click', function () { state.myTasksView=false; renderSpaces(); show('spaces'); });
 
   $('copy-code-btn').addEventListener('click', function () {
     var s = db.spaces.find(function (x) { return x.id === state.spaceId; });
@@ -1332,6 +1336,15 @@ loadRoomMessages();
     var m = myMembership(state.spaceId);
     if (!s || !m) { renderSpaces(); show('spaces'); return; }
     var isAdmin = m.role === 'admin';
+    // عرض «مهامي» للأعضاء فقط وداخل المساحة الحالية، دون تغيير صلاحيات الخادم.
+    if (isAdmin) state.myTasksView = false;
+    $('my-tasks-toggle').classList.toggle('hidden', isAdmin);
+    $('my-tasks-toggle').textContent = state.myTasksView ? '↩️ رجوع للغرفة' : '📋 مهامي';
+    $('my-tasks-toggle').setAttribute('aria-pressed', String(state.myTasksView));
+    $('tasks-heading').textContent = state.myTasksView ? '📋 مهامي في هذه المساحة' : '✅ المهام';
+    $('filters').classList.toggle('hidden', state.myTasksView);
+    $('room-chat-panel').classList.toggle('hidden', state.myTasksView);
+    $('space-side-panel').classList.toggle('hidden', state.myTasksView);
     $('space-name').textContent = s.name;
     $('space-desc').textContent = s.desc || '';
     $('space-role').textContent = isAdmin ? 'مدير' : 'عضو';
@@ -1357,6 +1370,18 @@ loadRoomMessages();
 
     renderTasks(); renderMembers();
   }
+
+  // التبديل بين عرض المساحة العادي وعرض المهام المختصر للعضو المكلّف.
+  $('my-tasks-toggle').addEventListener('click', function () {
+    var membership = myMembership(state.spaceId);
+    if (!membership || membership.role === 'admin') return;
+    state.myTasksView = !state.myTasksView;
+    state.filter = 'all';
+    $('filters').querySelectorAll('.chip').forEach(function (chip) {
+      chip.classList.toggle('active', chip.dataset.filter === 'all');
+    });
+    renderSpace();
+  });
 
   // تحديد/إلغاء تحديد جميع الأعضاء الموجودين في قائمة التكليف.
   $('select-all-assignees').addEventListener('change', function () {
@@ -1386,7 +1411,7 @@ loadRoomMessages();
     var spaceId=state.spaceId;
     // يجب تصفية المهام قبل إنشاء البطاقات؛ لا تظهر غير المعيّنة حتى للحظة.
     var tasks=db.tasks.filter(function(t){return t.spaceId===spaceId && canViewTask(t);})
-      .filter(function(t){return state.filter==='all'||t.status===state.filter;});
+      .filter(function(t){return state.myTasksView || state.filter==='all'||t.status===state.filter;});
     var membership=myMembership(spaceId);
     var isAdmin=!!(membership&&membership.role==='admin');
     var box=$('tasks-list');
@@ -1420,13 +1445,38 @@ loadRoomMessages();
       var progress=assignees.length?('<div class="task-progress">✅ أنجزها '+doneCount+' من '+assignees.length+' أعضاء'+(isAssigned?' • حالتك: '+STATUS[personalStatus]:'')+'</div>'):'';
       var el=document.createElement('article');
       el.className='task '+(task.status||'todo');
-      el.innerHTML='<h4 class="task-title">'+esc(task.title)+'</h4>'+
-        (task.details?'<p class="task-details">'+esc(task.details)+'</p>':'')+
-        '<div class="task-meta"><span>المعيّنون: '+esc(names)+'</span>'+dueInfo+
-        (task.reward?'<span>🎁 مكافأة المهمة: '+esc(task.reward)+'</span>':'')+'</div>'+
-        progress+'<div class="task-row"><div class="status-group">'+buttons+'</div>'+
-        (isAdmin?'<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
-      // أعضاء المهمة يشاهدون حالة تسليمهم؛ المدير يرى تسليمات جميع المكلّفين.
+      var compact = !!(state.myTasksView && !isAdmin && isAssigned);
+      var contentParent = el;
+      if (compact) {
+        // القائمة المختصرة: عنوان كامل، الوصف بسطرين، وعند النقر التفاصيل كاملة.
+        var deadline = task.dueAt ? new Date(task.dueAt).getTime() : NaN;
+        var overduePersonal = Number.isFinite(deadline) && deadline < Date.now() && mySubmission.status !== 'approved';
+        var dueLabel = Number.isFinite(deadline) ? ('📅 '+new Date(deadline).toLocaleString('ar-SA-u-ca-gregory',{dateStyle:'short',timeStyle:'short'})+' — '+(overduePersonal ? '🔴 متأخرة' : '🟢 غير متأخرة')) : '📅 بدون موعد';
+        var submissionLabel = (mySubmission.status && mySubmission.status !== 'none' ? SUBMISSION_STATES[mySubmission.status] : null) || STATUS[personalStatus] || 'لم تبدأ';
+        el.classList.add('my-task-card');
+        el.innerHTML = '<details class="my-task-disclosure">'+
+          '<summary class="my-task-summary">'+
+            '<span class="my-task-title">'+esc(task.title)+'</span>'+
+            '<span class="my-task-preview">'+esc(task.details||'لا يوجد وصف للمهمة')+'</span>'+
+            '<span class="my-task-summary-meta"><span>'+dueLabel+'</span>'+
+            '<span>🎁 '+esc(task.reward||'—')+'</span>'+
+            '<span>📌 '+esc(submissionLabel)+'</span></span>'+
+            '<span class="my-task-expand-hint">اضغط لعرض التفاصيل ▾</span>'+
+          '</summary>'+
+          '<div class="my-task-expanded">'+
+            (task.details?'<p class="task-details">'+esc(task.details)+'</p>':'')+
+            (dueInfo?'<div class="task-meta">'+dueInfo+'</div>':'')+
+            '<div class="task-row"><div class="status-group">'+buttons+'</div></div>'+
+          '</div></details>';
+        contentParent = el.querySelector('.my-task-expanded');
+      } else {
+        el.innerHTML='<h4 class="task-title">'+esc(task.title)+'</h4>'+ 
+          (task.details?'<p class="task-details">'+esc(task.details)+'</p>':'')+
+          '<div class="task-meta"><span>المعيّنون: '+esc(names)+'</span>'+dueInfo+
+          (task.reward?'<span>🎁 مكافأة المهمة: '+esc(task.reward)+'</span>':'')+'</div>'+ 
+          progress+'<div class="task-row"><div class="status-group">'+buttons+'</div>'+ 
+          (isAdmin?'<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
+      }      // أعضاء المهمة يشاهدون حالة تسليمهم؛ المدير يرى تسليمات جميع المكلّفين.
       var subPanel=document.createElement('div');
       subPanel.className='submission-panel';
       if (isAdmin && assignees.length) {
@@ -1441,7 +1491,7 @@ loadRoomMessages();
             (sub.status==='pending'?'<div><button class="btn primary small" type="button" data-review-task="'+esc(task.id)+'" data-review-user="'+esc(assignedId)+'">مراجعة التسليم</button></div>':'');
           subPanel.appendChild(row);
         });
-        el.appendChild(subPanel);
+        contentParent.appendChild(subPanel);
       } else if(isAssigned && !isAdmin) {
         var myRow=document.createElement('div');
         myRow.innerHTML='<h5>📤 تسليم المهمة</h5>'+submissionStatusPill(mySubmission.status)+
@@ -1450,13 +1500,13 @@ loadRoomMessages();
           (mySubmission.attachmentId?'<button class="btn ghost small" type="button" data-submission-file-task="'+esc(task.id)+'" data-submission-file-user="'+esc(me().id)+'">📎 فتح المرفق المسلّم</button>':'')+
           (!submissionLocked?'<div><button type="button" class="btn primary small" data-submit-task="'+esc(task.id)+'">'+(mySubmission.status==='returned'?'إعادة التسليم':'تسليم المهمة')+'</button></div>':'');
         subPanel.appendChild(myRow);
-        el.appendChild(subPanel);
+        contentParent.appendChild(subPanel);
       }
       if(canChat){
         var chatBtn=document.createElement('button');
         chatBtn.type='button';chatBtn.className='btn ghost small';
         chatBtn.textContent='💬 محادثة المهمة';chatBtn.dataset.taskChat=task.id;
-        chatBtn.style.marginTop='10px';el.appendChild(chatBtn);
+        chatBtn.style.marginTop='10px';contentParent.appendChild(chatBtn);
       }
       box.appendChild(el);
     });
@@ -2618,6 +2668,23 @@ document.addEventListener('click', async function (e) {
 .task-progress{margin-top:9px;color:var(--primary-dark);font-size:13px;font-weight:700}
 .report-empty{background:#fff;border-radius:16px;padding:24px;text-align:center;color:var(--muted)}
 @media(max-width:600px){.report-hero{padding:20px}.report-hero h2{font-size:23px}.invite-box{width:100%}.head-buttons{width:100%}.head-buttons .btn{flex:1}}
+/* ---------- صفحة مهامي المصغرة داخل المساحة ---------- */
+.my-tasks-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.my-task-card{padding:0;overflow:hidden}
+.my-task-disclosure{width:100%}
+.my-task-summary{list-style:none;cursor:pointer;padding:15px 18px;display:flex;flex-direction:column;gap:6px}
+.my-task-summary::-webkit-details-marker{display:none}
+.my-task-summary:focus-visible{outline:3px solid var(--primary);outline-offset:-3px}
+.my-task-title{font-weight:800;font-size:18px;overflow-wrap:anywhere}
+.my-task-preview{color:var(--muted);font-size:14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:pre-line}
+.my-task-summary-meta{display:flex;flex-wrap:wrap;gap:7px 14px;color:var(--ink);font-size:13px}
+.my-task-expand-hint{font-size:13px;font-weight:700;color:var(--primary-dark)}
+.my-task-disclosure[open] .my-task-expand-hint{font-size:0}
+.my-task-disclosure[open] .my-task-expand-hint::after{content:'اضغط لإخفاء التفاصيل ▴';font-size:13px}
+.my-task-expanded{padding:12px 18px 18px;border-top:1px solid var(--line)}
+.my-task-expanded .task-details{font-size:15px;white-space:pre-wrap;overflow-wrap:anywhere}
+.my-task-expanded .task-row{justify-content:flex-start}
+@media(max-width:600px){.my-tasks-toolbar{width:100%;justify-content:space-between}.my-task-summary-meta{gap:4px 10px}}
 </style>
 </body>
 </html>
