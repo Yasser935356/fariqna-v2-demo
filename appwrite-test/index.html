@@ -1,11 +1,6 @@
 
 
 
-
-
-
-
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -1892,6 +1887,69 @@ dueAt: dueAt
       return {id:m.userId,name:u?u.name:'عضو'};
     });
   }
+  // ---------- سجل الإنجازات الدائم: البيانات من Appwrite لا من المهام الحالية ----------
+  // يُعزل السجل محليًا حسب الحساب والمساحة، ولا يُخزَّن في localStorage.
+  var approvedHistoryCache = Object.create(null);
+  var approvedHistoryRequests = Object.create(null);
+  function historyKey(workspaceId){
+    return (me()?me().id:'guest') + ':' + workspaceId;
+  }
+  function currentApprovedHistory(){
+    return approvedHistoryCache[historyKey(state.spaceId)] || null;
+  }
+  async function refreshApprovedHistory(workspaceId){
+    var viewer=me();
+    if(!viewer || !workspaceId) return;
+    var key=historyKey(workspaceId);
+    if(approvedHistoryRequests[key]) return approvedHistoryRequests[key];
+    approvedHistoryCache[key] = null;
+    var request=(async function(){
+      try{
+        var functions=new Appwrite.Functions(window.fariqna.client);
+        var execution=await functions.createExecution({
+          functionId:'6afc936d003ba906e93f',
+          body:JSON.stringify({action:'listApprovedHistory',workspaceId:workspaceId}),
+          async:false,headers:{'content-type':'application/json'}
+        });
+        var result=JSON.parse(execution.responseBody||'{}');
+        if(execution.status==='failed' || execution.responseStatusCode>=400 ||
+            !result.success || !Array.isArray(result.history)){
+          throw new Error(result.message || 'تعذر جلب سجل الإنجازات');
+        }
+        // قد يكون المستخدم سجّل خروجًا أو غيّر الحساب أثناء انتظار الطلب.
+        if(!me() || me().id!==viewer.id || !myMembership(workspaceId))return;
+        approvedHistoryCache[key]={rows:result.history};
+      }catch(err){
+        if(me() && me().id===viewer.id){
+          approvedHistoryCache[key]={rows:null,error:String(err.message||err)};
+          toast('تعذر تحميل سجل الإنجازات: '+String(err.message||err));
+        }
+      }finally{
+        delete approvedHistoryRequests[key];
+        if(state.spaceId===workspaceId && me() && me().id===viewer.id){
+          if(state.view==='achievements')renderAchievements();
+          if(state.view==='ranking')renderRanking();
+          if(state.view==='rewards')renderRewards();
+        }
+      }
+    })();
+    approvedHistoryRequests[key]=request;
+    return request;
+  }
+  function approvedHistoryForUser(userId){
+    var cache=currentApprovedHistory();
+    return cache && Array.isArray(cache.rows) ? cache.rows.filter(function(row){
+      return row.userId===userId;
+    }) : [];
+  }
+  function showHistoryLoadingOrError(box){
+    var cache=currentApprovedHistory();
+    if(cache && Array.isArray(cache.rows))return false;
+    var message=cache && cache.error ? 'تعذر عرض سجل الإنجازات: '+cache.error : 'جارٍ تحميل سجل الإنجازات المعتمدة...';
+    var p=document.createElement('div');p.className='report-empty';p.textContent=message;
+    box.appendChild(p);
+    return true;
+  }
   function approvedTasksFor(userId, allTasks){
     return allTasks.filter(function(t){
       return (t.assignees||[]).includes(userId) && isApprovedFor(t,userId);
@@ -1901,7 +1959,13 @@ dueAt: dueAt
     var box=$('achievements-content');box.innerHTML='';
     if(!canViewReports()){show('space');return;}
     var tasks=db.tasks.filter(function(t){return t.spaceId===state.spaceId;});
-    if(!tasks.length){box.innerHTML='<div class="report-empty">لا توجد مهام حتى الآن.</div>';return;}
+    var currentHead=document.createElement('h3');
+    currentHead.textContent='📋 متابعة المهام الحالية';
+    box.appendChild(currentHead);
+    if(!tasks.length){
+      var empty=document.createElement('p');empty.className='muted';
+      empty.textContent='لا توجد مهام حالية في هذه المساحة.';box.appendChild(empty);
+    }
     tasks.forEach(function(task){
       var div=document.createElement('article');div.className='report-card';
       var ids=task.assignees||[];
@@ -1923,13 +1987,34 @@ dueAt: dueAt
       });
       div.appendChild(progress);box.appendChild(div);
     });
+    var archiveHead=document.createElement('h3');archiveHead.style.marginTop='22px';
+    archiveHead.textContent='🏆 سجل الإنجازات المعتمدة (يشمل المهام المحذوفة)';
+    box.appendChild(archiveHead);
+    if(showHistoryLoadingOrError(box))return;
+    var rows=currentApprovedHistory().rows.slice().sort(function(a,b){
+      return String(b.approvedAt||'').localeCompare(String(a.approvedAt||''));
+    });
+    if(!rows.length){
+      var empty=document.createElement('p');empty.className='muted';
+      empty.textContent='لم تُسجّل إنجازات معتمدة بعد.';box.appendChild(empty);return;
+    }
+    rows.forEach(function(row){
+      var user=db.users.find(function(u){return u.id===row.userId;});
+      var card=document.createElement('article');card.className='report-card';
+      var title=document.createElement('h3');title.textContent='✅ '+(row.taskTitle||'مهمة');card.appendChild(title);
+      var details=document.createElement('p');details.className='muted';
+      var when=new Date(row.approvedAt);
+      var dateLabel=Number.isNaN(when.getTime())?'—':when.toLocaleString('ar-SA-u-ca-gregory');
+      details.textContent=(user?user.name:'عضو')+' • 🎁 '+(row.reward||'—')+' • 📅 '+dateLabel;
+      card.appendChild(details);box.appendChild(card);
+    });
   }
   function renderRanking(){
     var box=$('ranking-content');box.innerHTML='';
     if(!canViewReports()){show('space');return;}
-    var allTasks=db.tasks.filter(function(t){return t.spaceId===state.spaceId;});
+    if(showHistoryLoadingOrError(box))return;
     var ranked=membersForReports().map(function(m){
-      return {name:m.name,count:approvedTasksFor(m.id,allTasks).length};
+      return {name:m.name,count:approvedHistoryForUser(m.id).length};
     }).sort(function(a,b){return b.count-a.count||a.name.localeCompare(b.name,'ar');});
     if(!ranked.length){box.innerHTML='<div class="report-empty">لا يوجد أعضاء بعد.</div>';return;}
     ranked.forEach(function(item,i){
@@ -1959,15 +2044,15 @@ dueAt: dueAt
   function renderRewards(){
     var box=$('rewards-content');box.innerHTML='';
     if(!canViewReports()){show('space');return;}
-    var allTasks=db.tasks.filter(function(t){return t.spaceId===state.spaceId;});
+    if(showHistoryLoadingOrError(box))return;
     var ranked=membersForReports().map(function(member){
-      var approved=approvedTasksFor(member.id,allTasks);
+      var approved=approvedHistoryForUser(member.id);
       var money=0,points=0,gifts=[];
-      approved.forEach(function(task){
-        var reward=parseReward(task.reward);
+      approved.forEach(function(record){
+        var reward=parseReward(record.reward);
         if(reward.kind==='money')money+=reward.amount;
         else if(reward.kind==='points')points+=reward.amount;
-        else gifts.push({reward:reward.label,task:task.title});
+        else gifts.push({reward:reward.label,task:record.taskTitle});
       });
       return {name:member.name,money:money,points:points,gifts:gifts,approved:approved.length};
     });
@@ -1993,15 +2078,15 @@ dueAt: dueAt
   }
   $('show-achievements').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
-    show('achievements');renderAchievements();refreshTasks(state.spaceId,true);
+    show('achievements');renderAchievements();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
   });
   $('show-ranking').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
-    show('ranking');renderRanking();refreshTasks(state.spaceId,true);
+    show('ranking');renderRanking();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
   });
   $('show-rewards').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
-    show('rewards');renderRewards();refreshTasks(state.spaceId,true);
+    show('rewards');renderRewards();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
   });
   document.querySelectorAll('[data-back-to-space]').forEach(function(btn){
     btn.addEventListener('click',function(){renderSpace();show('space');loadRoomMessages();});
@@ -2536,18 +2621,6 @@ document.addEventListener('click', async function (e) {
 </style>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
