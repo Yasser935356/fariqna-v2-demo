@@ -1,0 +1,13 @@
+{
+  "name": "فريقنا 2.0 - نسخة اختبار",
+  "short_name": "فريقنا 2.0",
+  "description": "منصة لإدارة المهام الجماعية والمحادثات والإنجازات",
+  "id": "/fariqna-v2-demo/appwrite-test/",
+  "start_url": "/fariqna-v2-demo/appwrite-test/",
+  "scope": "/fariqna-v2-demo/appwrite-test/",
+  "display": "standalone",
+  "background_color": "#F7F5FF",
+  "theme_color": "#5B4FE8",
+  "lang": "ar",
+  "dir": "rtl"
+}
