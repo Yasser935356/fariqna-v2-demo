@@ -848,6 +848,45 @@ $('push-toggle-btn').addEventListener('click', async function () {
     button.disabled = false;
   }
 });
+ // ---------- زر تجربة الإشعارات ----------
+const testPushBtn = document.createElement('button');
+testPushBtn.className = 'btn ghost';
+testPushBtn.type = 'button';
+testPushBtn.textContent = '🧪 تجربة إشعار';
+
+$('logout-btn').before(testPushBtn);
+ // عند الضغط على زر تجربة الإشعار
+testPushBtn.addEventListener('click', async function () {
+  testPushBtn.disabled = true;
+
+  try {
+    const functions = new Appwrite.Functions(window.fariqna.client);
+
+    const execution = await functions.createExecution({
+      functionId: '6afc936d003ba906e93f',
+      body: JSON.stringify({
+        action: 'sendTestPushNotification'
+      }),
+      async: false,
+      headers: {
+        'content-type': 'application/json'
+      }
+    });
+
+    const result = JSON.parse(execution.responseBody || '{}');
+
+    if (!result.success) {
+      throw new Error(result.message || 'فشل إرسال الإشعار');
+    }
+
+    toast('🔔 تم إرسال الإشعار التجريبي!');
+
+  } catch (err) {
+    toast('تعذر إرسال الإشعار: ' + err.message);
+  } finally {
+    testPushBtn.disabled = false;
+  }
+});
   $('logout-btn').addEventListener('click', async function () {
     try {
       await account.deleteSession({ sessionId: 'current' });
