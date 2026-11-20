@@ -910,7 +910,19 @@ function enterApp() {
   $('user-name').textContent = u.name;
   renderSpaces();
   show('spaces');
+  // استرجاع حالة الإشعارات بعد تحديث الصفحة
+  if ('serviceWorker' in navigator && 'Notification' in window) {
+    navigator.serviceWorker.getRegistration('./').then(async function (registration) {
+      const subscription = registration
+        ? await registration.pushManager.getSubscription()
+        : null;
 
+      $('push-toggle-btn').textContent =
+        Notification.permission === 'granted' && subscription
+          ? '🔔 الإشعارات مفعّلة'
+          : '🔔 تفعيل الإشعارات';
+    }).catch(function () {});
+  }
   var functions = new Appwrite.Functions(window.fariqna.client);
 
   functions.createExecution({
