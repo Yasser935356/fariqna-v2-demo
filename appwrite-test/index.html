@@ -394,6 +394,7 @@ textarea { resize: vertical; }
     <div class="top-actions">
       <span id="user-name" class="muted"></span>
       <button class="btn ghost" id="install-app-btn" type="button">📱 تثبيت فريقنا</button>
+     <button class="btn ghost" id="push-toggle-btn" type="button">🔔 تفعيل الإشعارات</button>
       <button class="btn ghost" id="logout-btn">خروج</button>
     </div>
   </header>
@@ -771,7 +772,82 @@ textarea { resize: vertical; }
       $('auth-error').textContent = err.message || 'فشل تسجيل الدخول';
     }
   });
+// ---------- مفاتيح إشعارات فريقنا 2.0 ----------
+const PUSH_PUBLIC_KEY = 'BMtOlxkM0pe88mf-tb_7Z0cQrBKbtLOFmiG-8NQysfvCmQXDm3Iq01j3saXViH7xUds_BLZyhLdquNGUobW7kfM';
 
+function decodeVapidKey(key) {
+  const padding = '='.repeat((4 - key.length % 4) % 4);
+  const base64 = (key + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64);
+
+  return Uint8Array.from(binary, c => c.charCodeAt(0));
+}
+ // تسجيل الجهاز لاستقبال الإشعارات
+async function createPushSubscription() {
+  if (
+    !('serviceWorker' in navigator) ||
+    !('PushManager' in window) ||
+    !('Notification' in window)
+  ) {
+    throw new Error('جهازك لا يدعم إشعارات الويب');
+  }
+
+  const permission = await Notification.requestPermission();
+
+  if (permission !== 'granted') {
+    throw new Error('لم يتم السماح بالإشعارات');
+  }
+
+  const registration = await navigator.serviceWorker.register(
+    './push-sw.js',
+    { scope: './' }
+  );
+
+  let subscription = await registration.pushManager.getSubscription();
+
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: decodeVapidKey(PUSH_PUBLIC_KEY)
+    });
+  }
+
+  return subscription.toJSON();
+}
+ // ---------- زر تفعيل الإشعارات ----------
+$('push-toggle-btn').addEventListener('click', async function () {
+  const button = this;
+  button.disabled = true;
+
+  try {
+    const subscription = await createPushSubscription();
+
+    const functions = new Appwrite.Functions(window.fariqna.client);
+    const execution = await functions.createExecution({
+      functionId: '6afc936d003ba906e93f',
+      body: JSON.stringify({
+        action: 'registerPushSubscription',
+        subscription: subscription
+      }),
+      async: false,
+      headers: { 'content-type': 'application/json' }
+    });
+
+    const result = JSON.parse(execution.responseBody || '{}');
+
+    if (!result.success) {
+      throw new Error(result.message || 'تعذر حفظ الاشتراك');
+    }
+
+    button.textContent = '🔔 الإشعارات مفعلة';
+    toast('تم تفعيل الإشعارات على هذا الجهاز');
+
+  } catch (err) {
+    toast('تعذر تفعيل الإشعارات: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
   $('logout-btn').addEventListener('click', async function () {
     try {
       await account.deleteSession({ sessionId: 'current' });
