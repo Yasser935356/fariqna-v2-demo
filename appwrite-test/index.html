@@ -3,6 +3,9 @@
 
 
 
+
+
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -177,6 +180,17 @@ textarea { resize: vertical; }
   border-radius: 999px; cursor: pointer; font-weight: 700; color: var(--muted); font-size: 14px;
 }
 .chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* الأولوية وتثبيت المهام — فريقنا التجريبي */
+select {
+  width:100%;padding:11px 13px;border:1.5px solid var(--line);
+  border-radius:10px;background:#fcfbf9;color:var(--ink);outline:0;
+}
+select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.15); }
+.task.pinned { outline:2px solid rgba(91,79,232,.45); }
+.task-priority-pill {display:inline-flex;align-items:center;border-radius:99px;padding:3px 9px;font-weight:800;background:#eeeaff;color:#4b3cc6;}
+.task-priority-pill.urgent {background:#ffe9e8;color:#a72727;}
+.task-priority-pill.important {background:#fff1d8;color:#8b5600;}
+.task-priority-pill.normal {background:#e8f5ec;color:#2c6b45;}
 
 /* المهام */
 .tasks { display: flex; flex-direction: column; gap: 12px; }
@@ -510,6 +524,17 @@ textarea { resize: vertical; }
   <input type="text" name="reward" maxlength="255"
          placeholder="مثال: 50 ريال أو هدية" required>
 </label>
+            <label>🚨 أولوية المهمة
+              <select name="priorityPreset" id="task-priority-preset">
+                <option value="عادية">🟢 عادية</option>
+                <option value="مهمة">🟡 مهمة</option>
+                <option value="عاجلة">🔴 عاجلة</option>
+                <option value="custom">✏️ أولوية مخصصة</option>
+              </select>
+            </label>
+            <label class="hidden" id="task-custom-priority-row">✏️ اكتب الأولوية المخصصة
+              <input id="task-custom-priority" type="text" name="priorityCustom" maxlength="255" placeholder="مثال: ضروري قبل وصول الضيوف">
+            </label>
             <fieldset class="assignees">
               <legend>تعيين إلى</legend>
               <label class="check" id="select-all-assignees-row">
@@ -1554,7 +1579,7 @@ loadRoomMessages();
           return !personalSubmission || personalSubmission.status!=='approved';
         }
         return state.filter==='all'||t.status===state.filter;
-      });
+      }).sort(function(a,b){return Number(!!b.isPinned)-Number(!!a.isPinned);});
     var membership=myMembership(spaceId);
     var isAdmin=!!(membership&&membership.role==='admin');
     var box=$('tasks-list');
@@ -1592,7 +1617,13 @@ loadRoomMessages();
       var doneCount=assignees.filter(function(id){return memberTaskStatus(task,id)==='done';}).length;
       var progress=assignees.length?('<div class="task-progress">✅ أنجزها '+doneCount+' من '+assignees.length+' أعضاء'+(isAssigned?' • حالتك: '+STATUS[personalStatus]:'')+'</div>'):'';
       var el=document.createElement('article');
-      el.className='task '+(task.status||'todo');
+      el.className='task '+(task.status||'todo')+(task.isPinned?' pinned':'');
+      var priorityName=String(task.priority||'عادية');
+      var priorityClass=priorityName==='عاجلة'?'urgent':priorityName==='مهمة'?'important':priorityName==='عادية'?'normal':'custom';
+      var priorityLocked=assignees.some(function(id){
+        var sub=(task.submissions&&task.submissions[id])||{status:'none'};
+        return sub.status==='pending'||sub.status==='approved';
+      });
       var compact = !!(state.myTasksView && !isAdmin && isAssigned);
       var contentParent = el;
       if (compact) {
@@ -1609,10 +1640,11 @@ loadRoomMessages();
         el.classList.add('my-task-card');
         el.innerHTML = '<details class="my-task-disclosure">'+
           '<summary class="my-task-summary">'+
-            '<span class="my-task-title">'+esc(task.title)+'</span>'+
+            '<span class="my-task-title">'+(task.isPinned?'📌 ':'')+esc(task.title)+'</span>'+
             '<span class="my-task-preview">'+esc(task.details||'لا يوجد وصف للمهمة')+'</span>'+
             '<span class="my-task-summary-meta"><span>'+dueLabel+'</span>'+
-            '<span>🎁 '+esc(task.reward||'—')+'</span>'+
+            '<span>🎁 '+esc(task.reward||'—')+'</span>'+ 
+            '<span>🚨 '+esc(priorityName)+'</span>'+
             '<span>📌 '+esc(submissionLabel)+'</span></span>'+
             '<span class="my-task-expand-hint">اضغط لعرض التفاصيل ▾</span>'+
           '</summary>'+
@@ -1623,12 +1655,15 @@ loadRoomMessages();
           '</div></details>';
         contentParent = el.querySelector('.my-task-expanded');
       } else {
-        el.innerHTML='<h4 class="task-title">'+esc(task.title)+'</h4>'+ 
+        el.innerHTML='<h4 class="task-title">'+(task.isPinned?'📌 ':'')+esc(task.title)+'</h4>'+ 
           (task.details?'<p class="task-details">'+esc(task.details)+'</p>':'')+
           '<div class="task-meta"><span>المعيّنون: '+esc(names)+'</span>'+dueInfo+
+          '<span class="task-priority-pill '+priorityClass+'">🚨 '+esc(priorityName)+'</span>'+
           (task.reward?'<span>🎁 مكافأة المهمة: '+esc(task.reward)+'</span>':'')+'</div>'+ 
           progress+'<div class="task-row"><div class="status-group">'+buttons+'</div>'+ 
-          (isAdmin?'<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
+          (isAdmin?'<button class="btn ghost small" type="button" data-pin-task="'+esc(task.id)+'">'+(task.isPinned?'📌 إلغاء التثبيت':'📌 تثبيت')+'</button>'+ 
+          '<button class="btn ghost small" type="button" data-priority-task="'+esc(task.id)+'"'+(priorityLocked?' disabled title="لا يمكن تعديل الأولوية أثناء المراجعة أو بعد اعتماد أحد المكلّفين"':'')+'>🚨 تغيير الأولوية</button>'+ 
+          '<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
       }      // أعضاء المهمة يشاهدون حالة تسليمهم؛ المدير يرى تسليمات جميع المكلّفين.
       var subPanel=document.createElement('div');
       subPanel.className='submission-panel';
@@ -1984,6 +2019,73 @@ $('tasks-list').addEventListener('click', async function (e) {
     }
   });
 
+// تفعيل الإدخال المخصص فقط عند اختياره.
+$('task-priority-preset').addEventListener('change',function () {
+  var custom=this.value==='custom';
+  $('task-custom-priority-row').classList.toggle('hidden',!custom);
+  $('task-custom-priority').required=custom;
+  if(!custom) $('task-custom-priority').value='';
+});
+
+// ---------- المدير: تثبيت المهام والأولوية ----------
+$('tasks-list').addEventListener('click',async function(event){
+  var pinBtn=event.target.closest('[data-pin-task]');
+  if(pinBtn){
+    var membership=myMembership(state.spaceId),task=db.tasks.find(function(t){
+      return t.id===pinBtn.dataset.pinTask && t.spaceId===state.spaceId;
+    });
+    if(membership?.role!=='admin'||!task){toast('التثبيت متاح للمدير فقط');return;}
+    if(pinBtn.disabled)return;
+    pinBtn.disabled=true;
+    try {
+      var result=await submissionAction({action:'setTaskPinned',taskId:task.id,pinned:!task.isPinned});
+      task.isPinned=result.task.isPinned;
+      save(db);renderTasks();
+      toast(result.message||'تم تحديث تثبيت المهمة');
+      await refreshTasks(state.spaceId,true);
+    } catch(err) {toast('تعذر تغيير التثبيت: '+err.message);pinBtn.disabled=false;}
+    return;
+  }
+  var priorityBtn=event.target.closest('[data-priority-task]');
+  if(!priorityBtn)return;
+  var membership=myMembership(state.spaceId),task=db.tasks.find(function(t){
+    return t.id===priorityBtn.dataset.priorityTask && t.spaceId===state.spaceId;
+  });
+  if(membership?.role!=='admin'||!task){toast('تعديل الأولوية متاح للمدير فقط');return;}
+  var values=['عادية','مهمة','عاجلة'];
+  var current=String(task.priority||'عادية');
+  var isCustom=!values.includes(current);
+  var options=values.map(function(p){return '<option value="'+esc(p)+'"'+(current===p?' selected':'')+'>'+({'عادية':'🟢 عادية','مهمة':'🟡 مهمة','عاجلة':'🔴 عاجلة'}[p])+'</option>';}).join('')+
+    '<option value="custom"'+(isCustom?' selected':'')+'>✏️ أولوية مخصصة</option>';
+  openModal('🚨 تغيير أولوية المهمة',
+    '<p class="muted">'+esc(task.title)+'</p>'+ 
+    '<label>اختر الأولوية<select name="priorityPreset" id="edit-task-priority-preset">'+options+'</select></label>'+ 
+    '<label id="edit-task-priority-row"'+(isCustom?'':' class="hidden"')+'>اكتب الأولوية المخصصة'+ 
+    '<input type="text" name="priorityCustom" id="edit-task-priority-text" maxlength="255" value="'+(isCustom?esc(current):'')+'"'+(isCustom?' required':'')+'></label>',
+    async function(fd){
+      var selected=String(fd.get('priorityPreset')||'عادية');
+      var priority=selected==='custom'?String(fd.get('priorityCustom')||'').trim():selected;
+      if(!priority||priority.length>255){toast('اكتب أولوية صحيحة');return;}
+      var btn=$('modal-form').querySelector('[type="submit"]');
+      if(btn.disabled)return;
+      btn.disabled=true;
+      try {
+        var result=await submissionAction({action:'setTaskPriority',taskId:task.id,priority:priority});
+        task.priority=result.task.priority;
+        save(db);closeModal();renderTasks();
+        toast('تم تعديل أولوية المهمة');
+        await refreshTasks(state.spaceId,true);
+      } catch(err) {toast('تعذر تعديل الأولوية: '+err.message);btn.disabled=false;}
+    }
+  );
+  $('edit-task-priority-preset').addEventListener('change',function(){
+    var custom=this.value==='custom';
+    $('edit-task-priority-row').classList.toggle('hidden',!custom);
+    $('edit-task-priority-text').required=custom;
+    if(!custom) $('edit-task-priority-text').value='';
+  });
+});
+
 $('task-form').addEventListener('submit', async function (e) {
   e.preventDefault();
 
@@ -2000,6 +2102,14 @@ $('task-form').addEventListener('submit', async function (e) {
   var title = String(fd.get('title') || '').trim();
   var description = String(fd.get('details') || '').trim();
  var reward = String(fd.get('reward') || '').trim();
+ var priorityPreset = String(fd.get('priorityPreset') || 'عادية');
+ var priority = priorityPreset === 'custom'
+   ? String(fd.get('priorityCustom') || '').trim()
+   : priorityPreset;
+ if (!priority || priority.length > 255 || !['عادية','مهمة','عاجلة','custom'].includes(priorityPreset)) {
+   toast('اكتب أولوية صحيحة للمهمة (255 حرفًا بحد أقصى)');
+   return;
+ }
 var dueAtInput = String(fd.get('dueAt') || '').trim();
  var dueAt = '';
 
@@ -2055,6 +2165,7 @@ if (dueAtInput) {
         title: title,
         description: description,
        reward: reward,
+        priority: priority,
         assignees: assignees,
 dueAt: dueAt
       }),
@@ -2080,6 +2191,8 @@ dueAt: dueAt
 
     save(db);
     form.reset();
+    $('task-custom-priority-row').classList.add('hidden');
+    $('task-custom-priority').required=false;
 
     if (state.spaceId === workspaceId) {
       renderTasks();
@@ -2887,6 +3000,10 @@ document.addEventListener('click', async function (e) {
 </style>
 </body>
 </html>
+
+
+
+
 
 
 
