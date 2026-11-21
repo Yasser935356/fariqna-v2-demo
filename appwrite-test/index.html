@@ -3,9 +3,6 @@
 
 
 
-
-
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -457,6 +454,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
         <button class="btn ghost" id="show-achievements" type="button">📊 إنجاز الأعضاء</button>
         <button class="btn ghost" id="show-ranking" type="button">🏅 ترتيب الأعضاء</button>
         <button class="btn ghost" id="show-rewards" type="button">🎁 مكافآت الأعضاء</button>
+        <button class="btn ghost" id="show-pending-submissions" type="button">📥 التسليمات المنتظرة</button>
        <button class="btn ghost" id="edit-space-btn" type="button">⚙️ إعدادات المساحة</button>
        <button class="btn danger" id="delete-space-btn" type="button">🗑️ حذف المساحة</button>
       </div>
@@ -579,6 +577,15 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
   </main>
 </section>
 
+<!-- لوحة المدير: صندوق التسليمات المنتظرة -->
+<section id="pending-screen" class="screen report-screen">
+  <header class="topbar"><div class="brand-small"><button class="btn ghost" type="button" data-back-to-space>↩️ رجوع للغرفة</button><strong>📥 التسليمات المنتظرة</strong></div></header>
+  <main class="container">
+    <div class="report-hero"><h2>📥 التسليمات المنتظرة <span id="pending-submissions-count" class="pending-inbox-count">0</span></h2><p>كل تسليم ينتظر قرار المدير في هذه المساحة، مرتب من الأقدم إلى الأحدث.</p></div>
+    <div id="pending-content" class="report-items"></div>
+  </main>
+</section>
+
 <!-- نوافذ حوارية -->
 <div class="modal hidden" id="modal">
   <div class="modal-card">
@@ -675,10 +682,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     toast._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
   }
   function show(view) {
-    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen'].forEach(function (id) {
+    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen', 'pending-screen'].forEach(function (id) {
       $(id).classList.remove('active');
     });
-    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen' };
+    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen' };
     $(map[view]).classList.add('active');
     state.view = view;
     if (view !== 'space') {
@@ -1467,6 +1474,7 @@ loadRoomMessages();
         if (state.view==='achievements') renderAchievements();
         if (state.view==='ranking') renderRanking();
         if (state.view==='rewards') renderRewards();
+        if (state.view==='pending') renderPendingSubmissions();
       }
       if(state.view==='spaces')renderSpaces();
     } catch(err) {
@@ -1663,6 +1671,7 @@ loadRoomMessages();
           progress+'<div class="task-row"><div class="status-group">'+buttons+'</div>'+ 
           (isAdmin?'<button class="btn ghost small" type="button" data-pin-task="'+esc(task.id)+'">'+(task.isPinned?'📌 إلغاء التثبيت':'📌 تثبيت')+'</button>'+ 
           '<button class="btn ghost small" type="button" data-priority-task="'+esc(task.id)+'"'+(priorityLocked?' disabled title="لا يمكن تعديل الأولوية أثناء المراجعة أو بعد اعتماد أحد المكلّفين"':'')+'>🚨 تغيير الأولوية</button>'+ 
+          '<button class="btn ghost small" type="button" data-edit-task="'+esc(task.id)+'"'+(priorityLocked?' disabled title="لا يمكن تعديل المهمة أثناء المراجعة أو بعد اعتماد أحد المكلّفين"':'')+'>✏️ تعديل المهمة</button>'+ 
           '<button class="icon-btn" data-del="'+esc(task.id)+'">حذف</button>':'')+'</div>';
       }      // أعضاء المهمة يشاهدون حالة تسليمهم؛ المدير يرى تسليمات جميع المكلّفين.
       var subPanel=document.createElement('div');
@@ -1846,10 +1855,12 @@ loadRoomMessages();
       return;
     }
     var review=e.target.closest('[data-review-task]');
-    if(review){
-      var task=db.tasks.find(function(t){return t.id===review.dataset.reviewTask&&t.spaceId===state.spaceId;});
+    if(review)openSubmissionReview(review.dataset.reviewTask,review.dataset.reviewUser);
+  });
+  // مراجعة موحّدة من بطاقة المهمة أو من صندوق الوارد.
+  function openSubmissionReview(taskId, assigneeId){
+      var task=db.tasks.find(function(t){return t.id===taskId&&t.spaceId===state.spaceId;});
       var membership=myMembership(state.spaceId), user=me();
-      var assigneeId=review.dataset.reviewUser;
       if(!task||!user||membership?.role!=='admin'||!task.assignees?.includes(assigneeId)){
         toast('مراجعة التسليم متاحة للمدير فقط');return;
       }
@@ -1874,7 +1885,7 @@ loadRoomMessages();
             task.assigneeStatuses=task.assigneeStatuses||{};
             task.assigneeStatuses[assigneeId]=decision==='approve'?'done':'doing';
             task.status=result.status||task.status;
-            closeModal();renderTasks();renderMembers();
+            closeModal();renderTasks();renderMembers();renderPendingSubmissions();
             toast(decision==='approve'?'تم اعتماد التسليم':'أُعيدت المهمة للعضو للتعديل');
             await refreshAfterSubmission();
             // السجل يحتفظ بوقت الاعتماد الرسمي من Appwrite.
@@ -1883,8 +1894,8 @@ loadRoomMessages();
           finally{button.disabled=false;}
         }
       );
-    }
-  });
+  }
+
   // المرفقات لا تفتح إلا بعد جلب رابط مؤقت من الخادم وبعد فحص صلاحيات المستخدم.
   document.addEventListener('click',async function(e){
     var button=e.target.closest('[data-submission-file-task]');
@@ -2084,6 +2095,103 @@ $('tasks-list').addEventListener('click',async function(event){
     $('edit-task-priority-text').required=custom;
     if(!custom) $('edit-task-priority-text').value='';
   });
+});
+
+
+// ---------- المدير: تعديل المهمة وتمديد موعد تسليمها ----------
+function datetimeLocalValue(iso){
+  if(!iso)return '';
+  var date=new Date(iso);
+  if(Number.isNaN(date.getTime()))return '';
+  function p(n){return String(n).padStart(2,'0');}
+  return date.getFullYear()+'-'+p(date.getMonth()+1)+'-'+p(date.getDate())+
+    'T'+p(date.getHours())+':'+p(date.getMinutes());
+}
+$('tasks-list').addEventListener('click',function(event){
+  var btn=event.target.closest('[data-edit-task]');
+  if(!btn||btn.disabled)return;
+  var membership=myMembership(state.spaceId);
+  var task=db.tasks.find(function(t){return t.spaceId===state.spaceId&&t.id===btn.dataset.editTask;});
+  if(!task||!membership||membership.role!=='admin'){
+    toast('تعديل المهمة متاح للمدير فقط');return;
+  }
+  var current=Array.isArray(task.assignees)?task.assignees:[];
+  var locked=current.some(function(id){
+    var sub=task.submissions&&task.submissions[id];
+    return sub&&['pending','approved'].includes(sub.status);
+  });
+  if(locked){toast('لا يمكن تعديل مهمة بانتظار المراجعة أو فيها تسليم معتمد');return;}
+  var members=db.members.filter(function(m){
+    return m.spaceId===task.spaceId && m.role!=='admin' && m.userId!==me().id;
+  });
+  var assigneeOptions=members.map(function(m){
+    var u=db.users.find(function(item){return item.id===m.userId;});
+    var wasSubmitted=task.submissions&&task.submissions[m.userId]&&task.submissions[m.userId].submittedAt;
+    // لا نسمح بحذف تكليف عضو سبق له التسليم حفاظًا على سجله.
+    var keep=!!wasSubmitted&&current.includes(m.userId);
+    return '<label class="check"><input type="checkbox" name="editAssignee" value="'+esc(m.userId)+'"'+
+      (current.includes(m.userId)?' checked':'')+(keep?' disabled':'')+'>'+
+      ' '+esc(u?u.name:'عضو')+(keep?' (لا يمكن إلغاء تكليفه بعد التسليم)':'')+'</label>';
+  }).join('');
+  var html='<label>عنوان المهمة<input type="text" name="title" maxlength="120" required value="'+esc(task.title||'')+'"></label>'+ 
+    '<label>تفاصيل المهمة<textarea name="description" rows="4" maxlength="1000">'+esc(task.details||'')+'</textarea></label>'+ 
+    '<label>🎁 مكافأة المهمة<input name="reward" maxlength="255" required value="'+esc(task.reward||'')+'"></label>'+ 
+    '<label>📅 موعد التسليم (اختياري — يمكنك تمديده أو إزالته)<input type="datetime-local" name="dueAt" value="'+esc(datetimeLocalValue(task.dueAt))+'"></label>'+ 
+    '<fieldset class="assignees"><legend>الأعضاء المكلّفون</legend>'+ 
+    '<label class="check"><input type="checkbox" id="edit-all-assignees"> ✅ تحديد الكل</label>'+ 
+    '<div id="edit-assignee-options">'+(assigneeOptions||'<p class="muted">لا يوجد أعضاء متاحون للتعيين.</p>')+'</div></fieldset>'+ 
+    '<p class="muted">يمكنك التعديل قبل أول تسليم أو بعد إرجاع التسليم. يمنع الخادم التعديل أثناء المراجعة أو بعد الاعتماد.</p>';
+  openModal('✏️ تعديل المهمة وتمديد موعدها',html,async function(fd){
+    var form=$('modal-form');
+    var title=String(fd.get('title')||'').trim();
+    var description=String(fd.get('description')||'').trim();
+    var reward=String(fd.get('reward')||'').trim();
+    var dueInput=String(fd.get('dueAt')||'').trim();
+    var dueAt=null;
+    if(dueInput){
+      var due=new Date(dueInput);
+      if(Number.isNaN(due.getTime())){toast('موعد التسليم غير صحيح');return;}
+      dueAt=due.toISOString();
+    }
+    if(!title||title.length>120||description.length>1000||!reward||reward.length>255){
+      toast('تحقق من العنوان والتفاصيل والمكافأة');return;
+    }
+    // نجمع جميع المربعات المختارة بما فيها الثابتة التي سبق لأصحابها التسليم.
+    var assignees=Array.from(form.querySelectorAll('input[name="editAssignee"]'))
+      .filter(function(input){return input.checked;}).map(function(input){return input.value;});
+    var button=form.querySelector('[type="submit"]');
+    if(button.disabled)return;
+    button.disabled=true;
+    try{
+      var result=await submissionAction({
+        action:'editTaskDetails',taskId:task.id,title:title,description:description,
+        reward:reward,dueAt:dueAt,assignees:assignees
+      });
+      if(!result.success)throw new Error(result.message||'تعذر حفظ المهمة');
+      closeModal();
+      task.title=title;task.details=description;task.reward=reward;task.dueAt=dueAt;
+      task.assignees=assignees;
+      save(db);
+      renderTasks();renderMembers();
+      toast('✅ تم حفظ تعديل المهمة');
+      await refreshTasks(state.spaceId,false);
+    }catch(err){toast('تعذر تعديل المهمة: '+err.message);button.disabled=false;}
+  });
+  var modal=$('modal-form');
+  var selectAll=$('edit-all-assignees');
+  var choices=Array.from(modal.querySelectorAll('input[name="editAssignee"]:not(:disabled)'));
+  function syncAll(){
+    var count=choices.filter(function(c){return c.checked;}).length;
+    selectAll.checked=choices.length>0&&count===choices.length;
+    selectAll.indeterminate=count>0&&count<choices.length;
+    selectAll.disabled=!choices.length;
+  }
+  selectAll.addEventListener('change',function(){
+    choices.forEach(function(c){c.checked=selectAll.checked;});
+    syncAll();
+  });
+  choices.forEach(function(c){c.addEventListener('change',syncAll);});
+  syncAll();
 });
 
 $('task-form').addEventListener('submit', async function (e) {
@@ -2450,6 +2558,62 @@ dueAt: dueAt
     if(!canViewReports())return toast('صفحة المدير فقط');
     show('rewards');renderRewards();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
   });
+
+// ---------- المدير: لوحة التسليمات المنتظرة ----------
+function renderPendingSubmissions(){
+  var box=$('pending-content');
+  box.innerHTML='';
+  $('pending-submissions-count').textContent='0';
+  if(!canViewReports()){
+    box.innerHTML='<div class="report-empty">هذه اللوحة متاحة لمدير المساحة فقط.</div>';
+    if(state.view==='pending')show('space');
+    return;
+  }
+  var rows=[];
+  db.tasks.filter(function(task){return task.spaceId===state.spaceId;}).forEach(function(task){
+    (task.assignees||[]).forEach(function(assigneeId){
+      var submission=task.submissions&&task.submissions[assigneeId];
+      if(submission&&submission.status==='pending')rows.push({
+        task:task,assigneeId:assigneeId,submission:submission
+      });
+    });
+  });
+  rows.sort(function(a,b){
+    return (new Date(a.submission.submittedAt||0).getTime()||0)-
+      (new Date(b.submission.submittedAt||0).getTime()||0);
+  });
+  $('pending-submissions-count').textContent=String(rows.length);
+  if(!rows.length){
+    box.innerHTML='<div class="report-empty">✅ لا توجد تسليمات تنتظر المراجعة حاليًا.</div>';
+    return;
+  }
+  rows.forEach(function(entry){
+    var task=entry.task;
+    var sub=entry.submission;
+    var u=db.users.find(function(item){return item.id===entry.assigneeId;});
+    var card=document.createElement('article');
+    card.className='report-card pending-inbox-card';
+    card.innerHTML='<h3>📋 '+esc(task.title||'مهمة')+'</h3>'+ 
+      '<p class="muted">👤 العضو: <strong>'+esc(u?u.name:'عضو')+'</strong></p>'+ 
+      '<p class="muted">🕒 وقت التسليم: '+esc(formatSubmissionDate(sub.submittedAt))+'</p>'+ 
+      (submissionWasLate(task,sub)?'<p class="pending-late">🔴 تسليم متأخر عن الموعد</p>':'')+
+      '<p class="submission-note">'+esc(sub.text||'لا يوجد ملخص مكتوب')+'</p>'+ 
+      (sub.attachmentId?'<p class="muted">📎 يوجد مرفق للتسليم</p>':'')+
+      '<button class="btn primary small" type="button" data-review-task="'+esc(task.id)+'" data-review-user="'+esc(entry.assigneeId)+'">📥 مراجعة التسليم</button>';
+    box.appendChild(card);
+  });
+}
+$('show-pending-submissions').addEventListener('click',function(){
+  if(!canViewReports())return toast('صفحة المدير فقط');
+  show('pending');
+  renderPendingSubmissions();
+  refreshTasks(state.spaceId,false);
+});
+$('pending-content').addEventListener('click',function(event){
+  var btn=event.target.closest('[data-review-task]');
+  if(btn&&!btn.disabled)openSubmissionReview(btn.dataset.reviewTask,btn.dataset.reviewUser);
+});
+
   document.querySelectorAll('[data-back-to-space]').forEach(function(btn){
     btn.addEventListener('click',function(){renderSpace();show('space');loadRoomMessages();});
   });
@@ -2880,7 +3044,7 @@ document.addEventListener('click', async function (e) {
         loadTaskMessages(true);
       }
     }
-    if(['space','achievements','ranking'].includes(state.view) && state.spaceId && Date.now()-lastTaskRefresh>20000){
+    if(['space','achievements','ranking','rewards','pending'].includes(state.view) && state.spaceId && Date.now()-lastTaskRefresh>20000){
       lastTaskRefresh=Date.now();
       refreshTasks(state.spaceId,true);
     }
@@ -2980,7 +3144,11 @@ document.addEventListener('click', async function (e) {
 .task-progress{margin-top:9px;color:var(--primary-dark);font-size:13px;font-weight:700}
 .report-empty{background:#fff;border-radius:16px;padding:24px;text-align:center;color:var(--muted)}
 @media(max-width:600px){.report-hero{padding:20px}.report-hero h2{font-size:23px}.invite-box{width:100%}.head-buttons{width:100%}.head-buttons .btn{flex:1}}
-/* ---------- صفحة مهامي المصغرة داخل المساحة ---------- */
+  .pending-inbox-count{display:inline-block;min-width:34px;text-align:center;border-radius:999px;padding:4px 10px;background:rgba(255,255,255,.2);color:#fff;font-size:18px;vertical-align:middle}
+  .pending-inbox-card h3{margin:0 0 12px}
+  .pending-inbox-card .submission-note{white-space:pre-wrap;overflow-wrap:anywhere}
+  .pending-late{color:#b91c1c;font-weight:800}
+  /* ---------- صفحة مهامي المصغرة داخل المساحة ---------- */
 .my-tasks-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .my-task-card{padding:0;overflow:hidden}
 .my-task-disclosure{width:100%}
@@ -3000,10 +3168,6 @@ document.addEventListener('click', async function (e) {
 </style>
 </body>
 </html>
-
-
-
-
 
 
 
