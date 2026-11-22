@@ -519,8 +519,8 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
            <label>🎁 نوع المكافأة
   <select id="task-reward-type" name="rewardType"><option value="money">💰 مبلغ مالي</option><option value="gift">🎁 هدية</option></select>
 </label>
-<label id="task-reward-money-row">💰 المبلغ بالريال
-  <input name="rewardMoney" type="number" min="0.01" max="999999999.99" step="0.01" required placeholder="مثال: 50">
+<label id="task-reward-money-row">💰 المبلغ والعملة
+  <input name="rewardMoney" type="text" maxlength="70" required placeholder="مثال: 50 ريال أو 10 جنيه">
 </label>
 <label id="task-reward-gift-row" class="hidden">🎁 وصف الهدية
   <input name="rewardGift" type="text" maxlength="235" placeholder="مثال: سماعة">
@@ -939,8 +939,11 @@ testPushBtn.addEventListener('click', async function () {
     }
   });
 
-  // ---------- قائمة المساحات ----------     
+  // ---------- قائمة المساحات ----------
+  // لا نحفظ حالة التحميل، لأن المهام لا تُحفظ في المتصفح بين الجلسات.
+  var taskCountsLoaded = {};
 function enterApp() {
+  taskCountsLoaded = {};
   var u = me();
   $('user-name').textContent = u.name;
   renderSpaces();
@@ -1023,6 +1026,9 @@ function enterApp() {
 
     save(db);
     renderSpaces();
+    // بعد استرجاع الغرف، نجلب المهام المصرّح بها من Appwrite لكل غرفة.
+    // التحديث يعيد رسم عدّاد المهام بدل عرض صفر خاطئ.
+    result.workspaces.forEach(function(space){refreshTasks(space.id,true);});
 
   }).catch(function (err) {
     toast("تعذر استرجاع الغرف: " + err.message);
@@ -1038,12 +1044,19 @@ function enterApp() {
       var s = db.spaces.find(function (x) { return x.id === m.spaceId; });
       if (!s) return;
       var count = db.members.filter(function (x) { return x.spaceId === s.id; }).length;
-      var tasks = db.tasks.filter(function (t) { return t.spaceId === s.id; }).length;
+      var tasks = db.tasks.filter(function(t){
+      if(t.spaceId!==s.id||!canViewTask(t))return false;
+      var assignees=Array.isArray(t.assignees)?t.assignees:[];
+      var submissions=t.submissions||{};
+      if(m.role==='admin')return !(assignees.length&&assignees.every(function(id){return submissions[id]&&submissions[id].status==='approved';}));
+      return !(submissions[u.id]&&submissions[u.id].status==='approved');
+    }).length;
+    var tasksLabel=taskCountsLoaded[s.id]?tasks+' مهام':'جارٍ تحميل المهام…';
       var card = document.createElement('div');
       card.className = 'space-card';
       card.innerHTML = '<h3>' + esc(s.name) + '</h3>' +
         '<span class="badge ' + (m.role === 'admin' ? '' : 'member') + '">' + (m.role === 'admin' ? 'مدير' : 'عضو') + '</span>' +
-        '<div class="meta"><span>' + count + ' أعضاء</span><span>' + tasks + ' مهام</span></div>';
+        '<div class="meta"><span>' + count + ' أعضاء</span><span>' + tasksLabel + '</span></div>';
       card.onclick = function () { openSpace(s.id); };
       list.appendChild(card);
     });
@@ -1472,6 +1485,7 @@ loadRoomMessages();
         state.taskChatId = null;
       }
       save(db);
+      taskCountsLoaded[workspaceId]=true;
       if (state.spaceId===workspaceId) {
         if (state.view==='space') {renderTasks();renderMembers();}
         if (state.view==='achievements') renderAchievements();
@@ -1591,6 +1605,8 @@ loadRoomMessages();
       .filter(function(t){
         var personalSubmission=viewer && t.submissions && t.submissions[viewer.id];
         if(!isAdmin && personalSubmission && personalSubmission.status==='approved') return false;
+        if(isAdmin && Array.isArray(t.assignees) && t.assignees.length &&
+          t.assignees.every(function(id){return t.submissions&&t.submissions[id]&&t.submissions[id].status==='approved';}))return false;
         if(state.myTasksView) return true;
         return state.filter==='all'||t.status===state.filter;
       }).sort(function(a,b){return Number(!!b.isPinned)-Number(!!a.isPinned);});
@@ -2037,22 +2053,36 @@ $('tasks-list').addEventListener('click', async function (e) {
   });
 
 // ---------- نوعا المكافآت: مبالغ مالية وهدايا فقط ----------
+function normalizeRewardDigits(input){
+  return String(input).replace(/[٠-٩]/g,function(c){return String(c.charCodeAt(0)-0x660);})
+    .replace(/[۰-۹]/g,function(c){return String(c.charCodeAt(0)-0x6F0);});
+}
 function rewardParts(raw){
   var text=String(raw||'').trim();
-  var financial=text.match(/^(?:مبلغ:\s*)?([0-9]+(?:\.[0-9]{1,2})?)\s*ريال$/);
-  if(financial)return {type:'money',money:financial[1],gift:''};
   var gift=text.match(/^هدية:\s*(.+)$/);
   if(gift)return {type:'gift',money:'',gift:gift[1]};
-  return {type:'gift',money:'',gift:text}; // قراءة الهدايا القديمة التجريبية
+  // تتعرف كذلك على مكافآت الاختبار القديمة: 100 ر.س و10 دولار أمريكي.
+  var normalized=normalizeRewardDigits(text.replace(/^مبلغ:\s*/,'')).trim();
+  var financial=normalized.match(/^([0-9]+(?:[.,][0-9]{1,2})?)(?:\s+(.{1,55}))?$/);
+  if(financial){
+    var amount=Number(financial[1].replace(',','.'));
+    var currency=String(financial[2]||'ريال').trim();
+    if(amount>0&&Number.isFinite(amount)&&currency&&!/[<>\u0000-\u001f]/.test(currency))
+      return {type:'money',money:String(amount)+' '+currency,amount:amount,currency:currency,gift:''};
+  }
+  return {type:'gift',money:'',gift:text};
 }
 function rewardValue(fd){
   var type=String(fd.get('rewardType')||'');
   if(type==='money'){
-    var raw=String(fd.get('rewardMoney')||'').trim();
-    if(!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(raw))throw new Error('اكتب مبلغًا صحيحًا لا يتجاوز منزلتين عشريتين');
-    var money=Number(raw);
+    var raw=normalizeRewardDigits(String(fd.get('rewardMoney')||'').trim());
+    var match=raw.match(/^([0-9]+(?:[.,][0-9]{1,2})?)(?:\s+(.{1,55}))?$/);
+    if(!match)throw new Error('اكتب المبلغ والعملة، مثل: 50 ريال أو 10 جنيه');
+    var money=Number(match[1].replace(',','.'));
+    var currency=String(match[2]||'ريال').trim();
     if(!Number.isFinite(money)||money<=0||money>999999999.99)throw new Error('المبلغ المالي غير صحيح');
-    return 'مبلغ: '+money.toFixed(2)+' ريال';
+    if(!currency||/[<>\u0000-\u001f]/.test(currency))throw new Error('اسم العملة غير صحيح');
+    return 'مبلغ: '+money.toFixed(2)+' '+currency;
   }
   if(type==='gift'){
     var gift=String(fd.get('rewardGift')||'').trim();
@@ -2066,8 +2096,8 @@ function rewardFieldsHtml(raw,prefix){
   return '<label>🎁 نوع المكافأة<select name="rewardType" id="'+prefix+'-type">'+
     '<option value="money"'+(!isGift?' selected':'')+'>💰 مبلغ مالي</option>'+
     '<option value="gift"'+(isGift?' selected':'')+'>🎁 هدية</option></select></label>'+
-    '<label id="'+prefix+'-money-row"'+(isGift?' class="hidden"':'')+'>💰 المبلغ بالريال'+
-    '<input name="rewardMoney" type="number" min="0.01" max="999999999.99" step="0.01" value="'+esc(parts.money)+'"></label>'+
+    '<label id="'+prefix+'-money-row"'+(isGift?' class="hidden"':'')+'>💰 المبلغ والعملة'+
+    '<input name="rewardMoney" type="text" maxlength="70" placeholder="مثال: 10 دولار" value="'+esc(parts.money)+'"></label>'+
     '<label id="'+prefix+'-gift-row"'+(!isGift?' class="hidden"':'')+'>🎁 وصف الهدية'+
     '<input name="rewardGift" type="text" maxlength="235" value="'+esc(parts.gift)+'"></label>';
 }
@@ -2555,12 +2585,12 @@ dueAt: dueAt
   // عرض المكافآت: مالية بالريال أو هدايا، بلا نقاط.
   function parseReward(raw){
     var parts=rewardParts(raw),original=String(raw||'').trim();
-    if(parts.type==='money')return {kind:'money',amount:Number(parts.money),label:original};
+    if(parts.type==='money')return {kind:'money',amount:parts.amount,currency:parts.currency,label:original};
     if(/^(?:[0-9]+\s*)?نقاط?$/.test(original))return {kind:'legacy',amount:0,label:original};
     return {kind:'gift',amount:0,label:parts.gift||'هدية'};
   }
   function fmtAmount(n){
-    return new Intl.NumberFormat('ar-SA',{maximumFractionDigits:2}).format(n);
+    return new Intl.NumberFormat('en-US',{maximumFractionDigits:2}).format(n);
   }
   function renderRewards(){
     var box=$('rewards-content');box.innerHTML='';
@@ -2568,16 +2598,17 @@ dueAt: dueAt
     if(showHistoryLoadingOrError(box))return;
     var ranked=membersForReports().map(function(member){
       var approved=approvedHistoryForUser(member.id);
-      var money=0,gifts=[];
+      var moneyByCurrency={},gifts=[];
       approved.forEach(function(record){
         var reward=parseReward(record.reward);
-        if(reward.kind==='money')money+=reward.amount;
-        else if(reward.kind==='gift')gifts.push({reward:reward.label,task:record.taskTitle});
+        if(reward.kind==='money'){
+          moneyByCurrency[reward.currency]=(moneyByCurrency[reward.currency]||0)+reward.amount;
+        }else if(reward.kind==='gift')gifts.push({reward:reward.label,task:record.taskTitle});
       });
-      return {name:member.name,money:money,gifts:gifts,approved:approved.length,records:approved};
+      return {name:member.name,moneyByCurrency:moneyByCurrency,gifts:gifts,approved:approved.length,records:approved};
     });
-    // لا نعادل الهدايا بالمبالغ. عند تعذر المقارنة، يكسر عدد المهام المعتمدة التعادل.
-    ranked.sort(function(a,b){return b.money-a.money||b.approved-a.approved||a.name.localeCompare(b.name,'ar');});
+    // لا نجمع مبالغ من عملات مختلفة ولا نقارن بينها بلا سعر صرف.
+    ranked.sort(function(a,b){return b.approved-a.approved||a.name.localeCompare(b.name,'ar');});
     if(!ranked.length){box.innerHTML='<div class="report-empty">لا يوجد أعضاء بعد.</div>';return;}
     ranked.forEach(function(item,i){
       var medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'🏅';
@@ -2586,7 +2617,10 @@ dueAt: dueAt
       head.innerHTML='<div class="rank-name">'+medal+' '+(i+1)+'. '+esc(item.name)+'</div><span class="badge">'+item.approved+' مهام معتمدة</span>';
       card.appendChild(head);
       var total=document.createElement('p');total.className='rewards-totals';
-      total.textContent='💰 '+fmtAmount(item.money)+' ريال  •  🎁 '+item.gifts.length+' هدايا';
+      var moneyText=Object.entries(item.moneyByCurrency).map(function(entry){
+        return fmtAmount(entry[1])+' '+entry[0];
+      }).join(' + ')||'0 ريال';
+      total.textContent='💰 '+moneyText+'  •  🎁 '+(item.gifts.length?item.gifts.length+' هدايا':'لا يوجد');
       card.appendChild(total);
       if(item.gifts.length){
         var info=document.createElement('p');info.className='muted';
