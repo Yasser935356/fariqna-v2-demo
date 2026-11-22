@@ -1,8 +1,6 @@
 
 
 
-
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -518,9 +516,14 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
            <label>📅 موعد التسليم (اختياري)
   <input type="datetime-local" name="dueAt">
 </label>
-           <label>🎁 مكافأة المهمة
-  <input type="text" name="reward" maxlength="255"
-         placeholder="مثال: 50 ريال أو هدية" required>
+           <label>🎁 نوع المكافأة
+  <select id="task-reward-type" name="rewardType"><option value="money">💰 مبلغ مالي</option><option value="gift">🎁 هدية</option></select>
+</label>
+<label id="task-reward-money-row">💰 المبلغ بالريال
+  <input name="rewardMoney" type="number" min="0.01" max="999999999.99" step="0.01" required placeholder="مثال: 50">
+</label>
+<label id="task-reward-gift-row" class="hidden">🎁 وصف الهدية
+  <input name="rewardGift" type="text" maxlength="235" placeholder="مثال: سماعة">
 </label>
             <label>🚨 أولوية المهمة
               <select name="priorityPreset" id="task-priority-preset">
@@ -573,7 +576,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
   <main class="container">
     <div class="report-hero"><h2>🎁 مكافآت الأعضاء</h2><p>المكافآت المستحقة عن التسليمات التي اعتمدها المدير فقط، لكل عضو على حدة.</p></div>
     <div id="rewards-content" class="ranking-items"></div>
-    <p class="muted" style="padding:12px 2px">تُجمع المبالغ المالية والنقاط كلٌّ على حدة. أما المكافآت المكتوبة كهدايا فتظهر بالاسم ولا تُحسب كمبلغ مالي.</p>
+    <p class="muted" style="padding:12px 2px">تُجمع المكافآت المالية بالريال، وتُعرض الهدايا بأسمائها دون تحويلها إلى مبالغ. ويمكن للمدير تعديل مكافأة كل إنجاز معتمد.</p>
   </main>
 </section>
 
@@ -1577,19 +1580,20 @@ loadRoomMessages();
   }
   function renderTasks() {
     var spaceId=state.spaceId;
-    // يجب تصفية المهام قبل إنشاء البطاقات؛ لا تظهر غير المعيّنة حتى للحظة.
-    var tasks=db.tasks.filter(function(t){return t.spaceId===spaceId && canViewTask(t);})
-      .filter(function(t){
-        if(state.myTasksView){
-          var member=me();
-          var personalSubmission=member && t.submissions && t.submissions[member.id];
-          // تختفي من «مهامي» للعضو الذي اعتُمد تسليمه فقط، وتبقى في الغرفة.
-          return !personalSubmission || personalSubmission.status!=='approved';
-        }
-        return state.filter==='all'||t.status===state.filter;
-      }).sort(function(a,b){return Number(!!b.isPinned)-Number(!!a.isPinned);});
     var membership=myMembership(spaceId);
     var isAdmin=!!(membership&&membership.role==='admin');
+    var viewer=me();
+    // بعد اعتماد تسليم العضو تختفي المهمة من قائمة الغرفة ومن «مهامي» له وحده.
+    // لا نحذف المهمة أو التسليم من البيانات؛ تبقى ظاهرة للمدير ولمن لم يُعتمد تسليمهم،
+    // وتبقى تفاصيل الإنجاز والتأخير والمكافأة محفوظة في Appwrite وسجل الإنجازات.
+    // هذه تصفية للعرض فقط؛ لا تُغيّر صلاحيات Appwrite الحالية.
+    var tasks=db.tasks.filter(function(t){return t.spaceId===spaceId && canViewTask(t);})
+      .filter(function(t){
+        var personalSubmission=viewer && t.submissions && t.submissions[viewer.id];
+        if(!isAdmin && personalSubmission && personalSubmission.status==='approved') return false;
+        if(state.myTasksView) return true;
+        return state.filter==='all'||t.status===state.filter;
+      }).sort(function(a,b){return Number(!!b.isPinned)-Number(!!a.isPinned);});
     var box=$('tasks-list');
     box.innerHTML='';
     tasks.forEach(function(task){
@@ -1709,7 +1713,9 @@ loadRoomMessages();
     });
     $('tasks-empty').textContent = state.myTasksView
       ? 'لا توجد مهام بانتظار إنجازك أو اعتماد المدير. ✅'
-      : 'لا توجد مهام في هذا التصنيف.';
+      : (!isAdmin && state.filter==='all'
+        ? 'لا توجد مهام نشطة لك. ✅'
+        : 'لا توجد مهام في هذا التصنيف.');
     $('tasks-empty').classList.toggle('hidden',tasks.length>0);
   }
 
@@ -2030,6 +2036,54 @@ $('tasks-list').addEventListener('click', async function (e) {
     }
   });
 
+// ---------- نوعا المكافآت: مبالغ مالية وهدايا فقط ----------
+function rewardParts(raw){
+  var text=String(raw||'').trim();
+  var financial=text.match(/^(?:مبلغ:\s*)?([0-9]+(?:\.[0-9]{1,2})?)\s*ريال$/);
+  if(financial)return {type:'money',money:financial[1],gift:''};
+  var gift=text.match(/^هدية:\s*(.+)$/);
+  if(gift)return {type:'gift',money:'',gift:gift[1]};
+  return {type:'gift',money:'',gift:text}; // قراءة الهدايا القديمة التجريبية
+}
+function rewardValue(fd){
+  var type=String(fd.get('rewardType')||'');
+  if(type==='money'){
+    var raw=String(fd.get('rewardMoney')||'').trim();
+    if(!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(raw))throw new Error('اكتب مبلغًا صحيحًا لا يتجاوز منزلتين عشريتين');
+    var money=Number(raw);
+    if(!Number.isFinite(money)||money<=0||money>999999999.99)throw new Error('المبلغ المالي غير صحيح');
+    return 'مبلغ: '+money.toFixed(2)+' ريال';
+  }
+  if(type==='gift'){
+    var gift=String(fd.get('rewardGift')||'').trim();
+    if(!gift||gift.length>235||/[\u0000-\u001f\u007f]/.test(gift))throw new Error('اكتب اسم هدية صحيحًا (235 حرفًا كحد أقصى)');
+    return 'هدية: '+gift;
+  }
+  throw new Error('اختر نوع المكافأة');
+}
+function rewardFieldsHtml(raw,prefix){
+  var parts=rewardParts(raw),isGift=parts.type==='gift';
+  return '<label>🎁 نوع المكافأة<select name="rewardType" id="'+prefix+'-type">'+
+    '<option value="money"'+(!isGift?' selected':'')+'>💰 مبلغ مالي</option>'+
+    '<option value="gift"'+(isGift?' selected':'')+'>🎁 هدية</option></select></label>'+
+    '<label id="'+prefix+'-money-row"'+(isGift?' class="hidden"':'')+'>💰 المبلغ بالريال'+
+    '<input name="rewardMoney" type="number" min="0.01" max="999999999.99" step="0.01" value="'+esc(parts.money)+'"></label>'+
+    '<label id="'+prefix+'-gift-row"'+(!isGift?' class="hidden"':'')+'>🎁 وصف الهدية'+
+    '<input name="rewardGift" type="text" maxlength="235" value="'+esc(parts.gift)+'"></label>';
+}
+function enableRewardFields(prefix){
+  var select=$(prefix+'-type'),money=$(prefix+'-money-row'),gift=$(prefix+'-gift-row');
+  function sync(){
+    var financial=select.value==='money';
+    money.classList.toggle('hidden',!financial);
+    gift.classList.toggle('hidden',financial);
+    money.querySelector('input').required=financial;
+    gift.querySelector('input').required=!financial;
+  }
+  select.addEventListener('change',sync);sync();
+}
+enableRewardFields('task-reward');
+
 // تفعيل الإدخال المخصص فقط عند اختياره.
 $('task-priority-preset').addEventListener('change',function () {
   var custom=this.value==='custom';
@@ -2135,7 +2189,7 @@ $('tasks-list').addEventListener('click',function(event){
   }).join('');
   var html='<label>عنوان المهمة<input type="text" name="title" maxlength="120" required value="'+esc(task.title||'')+'"></label>'+ 
     '<label>تفاصيل المهمة<textarea name="description" rows="4" maxlength="1000">'+esc(task.details||'')+'</textarea></label>'+ 
-    '<label>🎁 مكافأة المهمة<input name="reward" maxlength="255" required value="'+esc(task.reward||'')+'"></label>'+ 
+    rewardFieldsHtml(task.reward,'edit-reward')+ 
     '<label>📅 موعد التسليم (اختياري — يمكنك تمديده أو إزالته)<input type="datetime-local" name="dueAt" value="'+esc(datetimeLocalValue(task.dueAt))+'"></label>'+ 
     '<fieldset class="assignees"><legend>الأعضاء المكلّفون</legend>'+ 
     '<label class="check"><input type="checkbox" id="edit-all-assignees"> ✅ تحديد الكل</label>'+ 
@@ -2145,7 +2199,8 @@ $('tasks-list').addEventListener('click',function(event){
     var form=$('modal-form');
     var title=String(fd.get('title')||'').trim();
     var description=String(fd.get('description')||'').trim();
-    var reward=String(fd.get('reward')||'').trim();
+    var reward;
+    try{reward=rewardValue(fd);}catch(err){toast(err.message);return;}
     var dueInput=String(fd.get('dueAt')||'').trim();
     var dueAt=null;
     if(dueInput){
@@ -2177,6 +2232,7 @@ $('tasks-list').addEventListener('click',function(event){
       await refreshTasks(state.spaceId,false);
     }catch(err){toast('تعذر تعديل المهمة: '+err.message);button.disabled=false;}
   });
+  enableRewardFields('edit-reward');
   var modal=$('modal-form');
   var selectAll=$('edit-all-assignees');
   var choices=Array.from(modal.querySelectorAll('input[name="editAssignee"]:not(:disabled)'));
@@ -2209,7 +2265,8 @@ $('task-form').addEventListener('submit', async function (e) {
 
   var title = String(fd.get('title') || '').trim();
   var description = String(fd.get('details') || '').trim();
- var reward = String(fd.get('reward') || '').trim();
+ var reward;
+ try{reward=rewardValue(fd);}catch(err){toast(err.message);return;}
  var priorityPreset = String(fd.get('priorityPreset') || 'عادية');
  var priority = priorityPreset === 'custom'
    ? String(fd.get('priorityCustom') || '').trim()
@@ -2299,6 +2356,7 @@ dueAt: dueAt
 
     save(db);
     form.reset();
+    $('task-reward-type').dispatchEvent(new Event('change'));
     $('task-custom-priority-row').classList.add('hidden');
     $('task-custom-priority').required=false;
 
@@ -2494,19 +2552,12 @@ dueAt: dueAt
       box.appendChild(card);
     });
   }
-  // مكافأة المهمة حقل نصي موجود مسبقًا؛ لا يجوز جمع هدية مع مبلغ مالي.
-  // تدعم القيم: "50 ريال" و"50 ر.س" و"50 SAR"، أو "10 نقاط"، أو اسم هدية.
+  // عرض المكافآت: مالية بالريال أو هدايا، بلا نقاط.
   function parseReward(raw){
-    var original=String(raw||'').trim();
-    var normalized=original.replace(/[٠-٩]/g,function(c){return String(c.charCodeAt(0)-1632);})
-      .replace(/[۰-۹]/g,function(c){return String(c.charCodeAt(0)-1776);});
-    var match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(ريال(?:ات)?|ر\.?\s*س\.?|SAR|SR|﷼)$/i);
-    if(match) return {kind:'money',amount:Number(match[1].replace(',','.')),label:original};
-    match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(نقاط?|points?)?$/i);
-    if(match) return {kind:'points',amount:Number(match[1].replace(',','.')),label:original};
-    match=normalized.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(نقاط?|points?)$/i);
-    if(match) return {kind:'points',amount:Number(match[1].replace(',','.')),label:original};
-    return {kind:'gift',amount:0,label:original||'مكافأة غير محددة'};
+    var parts=rewardParts(raw),original=String(raw||'').trim();
+    if(parts.type==='money')return {kind:'money',amount:Number(parts.money),label:original};
+    if(/^(?:[0-9]+\s*)?نقاط?$/.test(original))return {kind:'legacy',amount:0,label:original};
+    return {kind:'gift',amount:0,label:parts.gift||'هدية'};
   }
   function fmtAmount(n){
     return new Intl.NumberFormat('ar-SA',{maximumFractionDigits:2}).format(n);
@@ -2517,17 +2568,16 @@ dueAt: dueAt
     if(showHistoryLoadingOrError(box))return;
     var ranked=membersForReports().map(function(member){
       var approved=approvedHistoryForUser(member.id);
-      var money=0,points=0,gifts=[];
+      var money=0,gifts=[];
       approved.forEach(function(record){
         var reward=parseReward(record.reward);
         if(reward.kind==='money')money+=reward.amount;
-        else if(reward.kind==='points')points+=reward.amount;
-        else gifts.push({reward:reward.label,task:record.taskTitle});
+        else if(reward.kind==='gift')gifts.push({reward:reward.label,task:record.taskTitle});
       });
-      return {name:member.name,money:money,points:points,gifts:gifts,approved:approved.length};
+      return {name:member.name,money:money,gifts:gifts,approved:approved.length,records:approved};
     });
     // لا نعادل الهدايا بالمبالغ. عند تعذر المقارنة، يكسر عدد المهام المعتمدة التعادل.
-    ranked.sort(function(a,b){return b.money-a.money||b.points-a.points||b.approved-a.approved||a.name.localeCompare(b.name,'ar');});
+    ranked.sort(function(a,b){return b.money-a.money||b.approved-a.approved||a.name.localeCompare(b.name,'ar');});
     if(!ranked.length){box.innerHTML='<div class="report-empty">لا يوجد أعضاء بعد.</div>';return;}
     ranked.forEach(function(item,i){
       var medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'🏅';
@@ -2536,16 +2586,53 @@ dueAt: dueAt
       head.innerHTML='<div class="rank-name">'+medal+' '+(i+1)+'. '+esc(item.name)+'</div><span class="badge">'+item.approved+' مهام معتمدة</span>';
       card.appendChild(head);
       var total=document.createElement('p');total.className='rewards-totals';
-      total.textContent='💰 '+fmtAmount(item.money)+' ريال  •  ⭐ '+fmtAmount(item.points)+' نقطة  •  🎁 '+item.gifts.length+' هدايا';
+      total.textContent='💰 '+fmtAmount(item.money)+' ريال  •  🎁 '+item.gifts.length+' هدايا';
       card.appendChild(total);
       if(item.gifts.length){
         var info=document.createElement('p');info.className='muted';
         info.textContent='الهدايا: '+item.gifts.map(function(g){return g.reward+' ('+g.task+')';}).join('، ');
         card.appendChild(info);
       }
+      // تعديل مكافأة إنجاز واحد؛ لا يغيّر مكافآت بقية الأعضاء.
+      if(item.records.length){
+        var list=document.createElement('div');list.className='reward-records';
+        item.records.forEach(function(record){
+          var row=document.createElement('div');row.className='submission-entry';
+          var label=document.createElement('span');
+          label.textContent=(record.taskTitle||'مهمة')+' — '+(record.reward||'—');
+          var edit=document.createElement('button');
+          edit.type='button';edit.className='btn ghost small';
+          edit.textContent='✏️ تعديل المكافأة';edit.dataset.editMemberReward=record.id;
+          row.appendChild(label);row.appendChild(edit);list.appendChild(row);
+        });
+        card.appendChild(list);
+      }
       box.appendChild(card);
     });
   }
+  $('rewards-content').addEventListener('click',function(event){
+    var button=event.target.closest('[data-edit-member-reward]');
+    if(!button||!canViewReports())return;
+    var record=currentApprovedHistory()?.rows?.find(function(r){return r.id===button.dataset.editMemberReward;});
+    if(!record)return toast('الإنجاز غير موجود');
+    var member=db.users.find(function(u){return u.id===record.userId;});
+    openModal('✏️ تعديل مكافأة '+(member?member.name:'العضو'),
+      '<p>المهمة: <strong>'+esc(record.taskTitle||'')+'</strong></p>'+
+      rewardFieldsHtml(record.reward,'member-reward'),async function(fd){
+        var reward;
+        try{reward=rewardValue(fd);}catch(err){toast(err.message);return;}
+        var form=$('modal-form'),submit=form.querySelector('[type="submit"]');
+        if(submit.disabled)return;submit.disabled=true;
+        try{
+          var result=await submissionAction({action:'updateMemberReward',historyId:record.id,reward:reward});
+          if(!result.success)throw new Error(result.message||'تعذر تعديل المكافأة');
+          record.reward=result.reward;
+          closeModal();renderRewards();toast('✅ تم تعديل مكافأة العضو');
+          await refreshApprovedHistory(state.spaceId);
+        }catch(err){toast('تعذر تعديل المكافأة: '+err.message);submit.disabled=false;}
+      });
+    enableRewardFields('member-reward');
+  });
   $('show-achievements').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
     show('achievements');renderAchievements();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
