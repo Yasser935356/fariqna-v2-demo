@@ -506,7 +506,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <aside class="col-side" id="space-side-panel">
         <div class="panel" id="new-task-panel">
          <h3>📝 مهمة جديدة</h3>
-          <form id="task-form" class="form">
+          <form id="task-form" class="form" novalidate>
             <label>عنوان المهمة
               <input type="text" name="title" required maxlength="120">
             </label>
@@ -2295,8 +2295,22 @@ $('task-form').addEventListener('submit', async function (e) {
 
   var title = String(fd.get('title') || '').trim();
   var description = String(fd.get('details') || '').trim();
- var reward;
- try{reward=rewardValue(fd);}catch(err){toast(err.message);return;}
+  // نعطي رسالة واضحة بدل رسالة المتصفح العامة عند نسيان العنوان.
+  if (!title) {
+    toast('❌ مرفوضة يا معلم: لازم تكتب عنوان المهمة');
+    form.querySelector('input[name="title"]').focus();
+    return;
+  }
+  if (title.length > 120) {
+    toast('❌ مرفوضة يا معلم: عنوان المهمة طويل؛ الحد 120 حرفًا');
+    return;
+  }
+  if (description.length > 1000) {
+    toast('❌ مرفوضة يا معلم: تفاصيل المهمة طويلة؛ الحد 1000 حرف');
+    return;
+  }
+  var reward;
+  try {reward=rewardValue(fd);} catch(err) {toast('❌ مرفوضة يا معلم: '+err.message);return;}
  var priorityPreset = String(fd.get('priorityPreset') || 'عادية');
  var priority = priorityPreset === 'custom'
    ? String(fd.get('priorityCustom') || '').trim()
@@ -2335,11 +2349,6 @@ if (dueAtInput) {
   });
   if (forbiddenAssignee) {
     toast('يُسمح بتعيين الأعضاء فقط، ولا يمكن تعيين المدير');
-    return;
-  }
-
-  if (!title || title.length > 120 || description.length > 1000) {
-    toast('تحقق من عنوان المهمة وتفاصيلها');
     return;
   }
 
@@ -2398,7 +2407,7 @@ dueAt: dueAt
     toast('تم إنشاء المهمة وحفظها بنجاح');
 
   } catch (err) {
-    toast('تعذر إنشاء المهمة: ' + err.message);
+    toast('❌ مرفوضة يا معلم: ' + err.message);
 
   } finally {
     btn.disabled = false;
