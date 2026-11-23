@@ -227,6 +227,9 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
 .member-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stat { font-size: 13px; color: var(--muted); }
 
+.member-profile-link { border: 0; background: transparent; padding: 4px 0; color: var(--primary-dark); font: inherit; font-weight: 800; cursor: pointer; text-align: right; }
+.member-profile-link:hover { text-decoration: underline; }
+.member-profile-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 20px; }
 /* النافذة الحوارية */
 .modal {
   position: fixed; inset: 0; background: rgba(38,50,58,.45); display: flex;
@@ -607,6 +610,26 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
   </main>
 </section>
 
+<!-- المرحلة التاسعة: ملف العضو، متاح لمدير المساحة فقط -->
+<section id="member-profile-screen" class="screen report-screen">
+  <header class="topbar"><div class="brand-small">
+    <button class="btn ghost" type="button" data-back-to-space>↩️ رجوع للغرفة</button>
+    <strong>👤 ملف العضو</strong>
+  </div></header>
+  <main class="container">
+    <div class="report-hero">
+      <h2 id="manager-member-name">👤 ملف العضو</h2>
+      <p>متابعة الإنجازات والمكافآت والمهام الخاصة بهذا العضو.</p>
+    </div>
+    <nav id="manager-member-tabs" class="member-profile-tabs" aria-label="أقسام ملف العضو">
+      <button type="button" class="chip active" data-member-tab="stats" aria-pressed="true">📊 الإحصائيات</button>
+      <button type="button" class="chip" data-member-tab="rewards" aria-pressed="false">💰 المكافآت</button>
+      <button type="button" class="chip" data-member-tab="tasks" aria-pressed="false">📋 سجل المهام</button>
+    </nav>
+    <div id="manager-member-content" class="report-items" aria-live="polite"></div>
+  </main>
+</section>
+
 <!-- نوافذ حوارية -->
 <div class="modal hidden" id="modal">
   <div class="modal-card">
@@ -694,7 +717,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     });
   }
   var STATUS = { todo: 'لم تبدأ', doing: 'قيد التنفيذ', done: 'مكتملة' };
-  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null, myTasksView: false };
+  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null, myTasksView: false, memberProfileId: null, memberProfileTab: 'stats' };
 
   function toast(msg) {
     var t = $('toast');
@@ -703,10 +726,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     toast._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
   }
   function show(view) {
-    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen', 'pending-screen', 'profile-screen'].forEach(function (id) {
+    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen', 'pending-screen', 'profile-screen', 'member-profile-screen'].forEach(function (id) {
       $(id).classList.remove('active');
     });
-    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen', profile:'profile-screen' };
+    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen', profile:'profile-screen', 'member-profile':'member-profile-screen' };
     $(map[view]).classList.add('active');
     state.view = view;
     if (view !== 'space') {
@@ -1511,6 +1534,7 @@ loadRoomMessages();
         if (state.view==='rewards') renderRewards();
         if (state.view==='pending') renderPendingSubmissions();
         if (state.view==='profile') renderMyProfile();
+        if (state.view==='member-profile') renderManagerMemberProfile();
       }
       if(state.view==='spaces')renderSpaces();
     } catch(err) {
@@ -2450,7 +2474,10 @@ dueAt: dueAt
       // العضو غير المدير لا يحصل على إحصاءات مهام زملائه المخفية.
       var stat = isAdmin || (viewer && viewer.id === m.userId)
         ? completed + ' مكتملة' : 'عضو';
-      li.innerHTML='<div class="member-info"><span class="avatar">'+esc(u.name.charAt(0))+'</span><span>'+esc(u.name)+'</span></div>'+
+      var displayName=isAdmin && m.role!=='admin' ?
+         '<button type="button" class="member-profile-link" data-manager-member-id="'+esc(m.userId)+'">'+esc(u.name)+'</button>' :
+         '<span>'+esc(u.name)+'</span>';
+       li.innerHTML='<div class="member-info"><span class="avatar">'+esc(u.name.charAt(0))+'</span>'+displayName+'</div>'+
         '<span class="stat">'+(m.role==='admin'?'👑 مدير • ':'')+stat+'</span>';
       ul.appendChild(li);
     });
@@ -2517,6 +2544,7 @@ dueAt: dueAt
           if(state.view==='ranking')renderRanking();
           if(state.view==='rewards')renderRewards();
           if(state.view==='profile')renderMyProfile();
+          if(state.view==='member-profile')renderManagerMemberProfile();
         }
       }
     })();
@@ -2611,6 +2639,106 @@ dueAt: dueAt
       box.appendChild(card);
     });
   }
+
+  // ---------- المرحلة التاسعة: ملف عضو للمدير ----------
+  function renderManagerMemberProfile(){
+    if(!canViewReports()){show('space');toast('المدير فقط يستطيع عرض ملفات الأعضاء');return;}
+    var memberId=state.memberProfileId;
+    var membership=db.members.find(function(m){
+      return m.spaceId===state.spaceId && m.userId===memberId && m.role!=='admin';
+    });
+    if(!membership){show('space');toast('العضو غير موجود في المساحة');return;}
+    var u=db.users.find(function(user){return user.id===memberId;});
+    $('manager-member-name').textContent='👤 '+(u?u.name:'العضو');
+    document.querySelectorAll('#manager-member-tabs [data-member-tab]').forEach(function(button){
+      var selected=button.dataset.memberTab===state.memberProfileTab;
+      button.classList.toggle('active',selected);button.setAttribute('aria-pressed',String(selected));
+    });
+    var box=$('manager-member-content');box.replaceChildren();
+    function card(label,value,detail){
+      var art=document.createElement('article');art.className='ranking-card';art.style.marginBottom='12px';
+      var h=document.createElement('div');h.className='rank-head';
+      var l=document.createElement('strong');l.textContent=label;
+      var v=document.createElement('span');v.className='rank-number';v.textContent=String(value);
+      h.append(l,v);art.appendChild(h);
+      if(detail){var p=document.createElement('p');p.className='muted';p.textContent=detail;art.appendChild(p);}
+      box.appendChild(art);return art;
+    }
+    var active=db.tasks.filter(function(t){
+      return t.spaceId===state.spaceId && Array.isArray(t.assignees) && t.assignees.includes(memberId);
+    });
+    var record=currentApprovedHistory(),loaded=!!(record && Array.isArray(record.rows));
+    var approved=loaded?approvedHistoryForUser(memberId):[];
+    var stats={pending:0,returned:0,notSubmitted:0,late:0}, current=[];
+    active.forEach(function(task){
+      var sub=task.submissions&&task.submissions[memberId];
+      var status=sub&&sub.status||'none';
+      if(status==='approved')return;
+      if(status==='pending')stats.pending++;
+      else if(status==='returned')stats.returned++;
+      else stats.notSubmitted++;
+      var due=Date.parse(task.dueAt||''),sent=Date.parse(sub&&sub.submittedAt||'');
+      var late=Number.isFinite(due) && (Number.isFinite(sent)?sent>due:Date.now()>due);
+      if(late)stats.late++;
+      current.push({task:task,status:status,late:late});
+    });
+    if(state.memberProfileTab==='stats'){
+      card('✅ إنجازات معتمدة',loaded?approved.length:'…',loaded?'يشمل المهام المعتمدة التي اختفت من القائمة الحالية':'جارٍ تحميل السجل من Appwrite');
+      card('🔴 إنجازات متأخرة ومعتمدة',loaded?approved.filter(function(row){return row.wasLate===true;}).length:'…');
+      card('📤 بانتظار اعتماد المدير',stats.pending);
+      card('🔄 أعيدت للتعديل',stats.returned);
+      card('⏰ مهام متأخرة حاليًا',stats.late);
+      card('📝 لم تُسلّم بعد',stats.notSubmitted);
+    }else if(state.memberProfileTab==='rewards'){
+      if(!loaded){card('⏳ سجل المكافآت',record&&record.error?'تعذر التحميل: '+record.error:'جارٍ تحميل المكافآت…');return;}
+      var money=new Map(),gifts=[];
+      approved.forEach(function(row){
+        var item=rewardParts(row.reward);
+        if(item.type==='money'&&Number.isFinite(item.amount))
+          money.set(item.currency,(money.get(item.currency)||0)+item.amount);
+        else if(item.type==='gift')gifts.push(item.gift+' ('+(row.taskTitle||'مهمة')+')');
+      });
+      card('💰 إجمالي المبالغ',Array.from(money,function(item){return fmtAmount(item[1])+' '+item[0];}).join(' + ')||'0 ريال',
+        'كل عملة تُجمع منفصلة دون تحويل');
+      card('🎁 الهدايا',gifts.length?gifts.length+' هدايا':'لا يوجد',gifts.join('، ')||'لا توجد هدايا معتمدة');
+      approved.forEach(function(row){
+        var art=card('✅ '+(row.taskTitle||'مهمة'),row.reward||'بدون مكافأة');
+        var btn=document.createElement('button');btn.type='button';btn.className='btn ghost small';
+        btn.dataset.editMemberReward=row.id;btn.textContent='✏️ تعديل المكافأة';art.appendChild(btn);
+      });
+    }else if(state.memberProfileTab==='tasks'){
+      var head=document.createElement('h3');head.textContent='📋 المهام الحالية';box.appendChild(head);
+      if(!current.length)card('المهام الحالية','لا توجد مهام غير معتمدة');
+      current.forEach(function(item){
+        var status={none:'لم تُسلّم',pending:'بانتظار الاعتماد',returned:'أعيدت للتعديل'}[item.status]||'قيد التنفيذ';
+        card('📌 '+item.task.title,status+(item.late?' • متأخرة':''));
+      });
+      var historyTitle=document.createElement('h3');historyTitle.textContent='🏆 السجل المعتمد';box.appendChild(historyTitle);
+      if(!loaded){card('⏳ السجل',record&&record.error?'تعذر التحميل: '+record.error:'جارٍ التحميل…');return;}
+      if(!approved.length)card('الإنجازات','لا توجد إنجازات معتمدة');
+      approved.slice().sort(function(a,b){return (Date.parse(b.approvedAt)||0)-(Date.parse(a.approvedAt)||0);})
+        .forEach(function(row){
+          var time=Date.parse(row.approvedAt);
+          var date=Number.isFinite(time)?new Date(time).toLocaleString('ar-SA-u-ca-gregory'):'—';
+          card('✅ '+(row.taskTitle||'مهمة'),row.reward||'بدون مكافأة','تاريخ الاعتماد: '+date+(row.wasLate===true?' • متأخرة':''));
+        });
+    }
+  }
+  $('members-list').addEventListener('click',function(e){
+    var button=e.target.closest('[data-manager-member-id]');
+    if(!button||!canViewReports())return;
+    var id=button.dataset.managerMemberId;
+    if(!db.members.some(function(m){return m.spaceId===state.spaceId&&m.userId===id&&m.role!=='admin';}))return;
+    state.memberProfileId=id;state.memberProfileTab='stats';
+    show('member-profile');renderManagerMemberProfile();
+    refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
+  });
+  $('manager-member-tabs').addEventListener('click',function(e){
+    var button=e.target.closest('[data-member-tab]');
+    if(!button||!canViewReports()||state.view!=='member-profile')return;
+    state.memberProfileTab=button.dataset.memberTab;renderManagerMemberProfile();
+  });
+
   // ---------- المرحلة الثامنة: ملفي (المستخدم الحالي فقط) ----------
   function renderMyProfile(){
     var box=$('profile-content');
@@ -2827,7 +2955,7 @@ dueAt: dueAt
       box.appendChild(card);
     });
   }
-  $('rewards-content').addEventListener('click',function(event){
+  function handleMemberRewardEdit(event){
     var button=event.target.closest('[data-edit-member-reward]');
     if(!button||!canViewReports())return;
     var record=currentApprovedHistory()?.rows?.find(function(r){return r.id===button.dataset.editMemberReward;});
@@ -2844,12 +2972,14 @@ dueAt: dueAt
           var result=await submissionAction({action:'updateMemberReward',historyId:record.id,reward:reward});
           if(!result.success)throw new Error(result.message||'تعذر تعديل المكافأة');
           record.reward=result.reward;
-          closeModal();renderRewards();toast('✅ تم تعديل مكافأة العضو');
+          closeModal();renderRewards();if(state.view==='member-profile')renderManagerMemberProfile();toast('✅ تم تعديل مكافأة العضو');
           await refreshApprovedHistory(state.spaceId);
         }catch(err){toast('تعذر تعديل المكافأة: '+err.message);submit.disabled=false;}
       });
     enableRewardFields('member-reward');
-  });
+  }
+  $('rewards-content').addEventListener('click',handleMemberRewardEdit);
+  $('manager-member-content').addEventListener('click',handleMemberRewardEdit);
   $('show-achievements').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
     show('achievements');renderAchievements();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
