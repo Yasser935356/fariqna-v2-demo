@@ -2653,7 +2653,9 @@ dueAt: dueAt
       else if(status==='returned')returned++;
       else notSubmitted++;
       var due=task.dueAt ? Date.parse(task.dueAt) : NaN;
-      var isLate=Number.isFinite(due) && due < now;
+      var sent= submission && submission.submittedAt ? Date.parse(submission.submittedAt) : NaN;
+      var isLate=Number.isFinite(due) &&
+        (Number.isFinite(sent)? sent>due : due<now);
       if(isLate)late++;
       var label=status==='pending'?'بانتظار اعتماد المدير':
         status==='returned'?'أعيدت للتعديل':'لم تُسلّم بعد';
@@ -2663,8 +2665,22 @@ dueAt: dueAt
     var history=currentApprovedHistory();
     var isLoaded=!!(history&&Array.isArray(history.rows));
     var approved=isLoaded ? approvedHistoryForUser(viewer.id) : [];
+    // السجل الدائم يخزن حالة التأخير. وتستخدم بيانات المهمة الحالية كخطة
+    // احتياطية للتسليمات القديمة حتى تُحدَّث سجلاتها في Appwrite.
+    function wasApprovedLate(row){
+      if(typeof row.wasLate === 'boolean') return row.wasLate;
+      var oldTask=mine.find(function(t){return t.id===row.taskId;});
+      var sub=oldTask && oldTask.submissions && oldTask.submissions[viewer.id];
+      if(!oldTask || !sub)return null;
+      if(!oldTask.dueAt)return false;
+      var due=Date.parse(oldTask.dueAt),sent=Date.parse(sub.submittedAt||'');
+      return Number.isFinite(due)&&Number.isFinite(sent)?sent>due:null;
+    }
+    var approvedLate=approved.filter(function(row){return wasApprovedLate(row)===true;});
     card('✅ تسليمات معتمدة',isLoaded?String(approved.length):'…',
       isLoaded?'سجل دائم للإنجازات المعتمدة':'جارٍ تحميل سجل الإنجازات من Appwrite');
+    card('🔴 تسليمات متأخرة ومعتمدة',isLoaded?String(approvedLate.length):'…',
+      'مهام سُلّمت بعد موعدها ثم اعتمدها المدير؛ تُحفظ في سجل الإنجازات');
     card('📤 بانتظار الاعتماد',String(pending),'تسليمات أرسلتها ولم يعتمدها المدير بعد');
     card('🔄 أعيدت للتعديل',String(returned),'تسليمات طلب المدير إعادة العمل عليها');
     card('⏰ مهام متأخرة حاليًا',String(late),
@@ -2706,8 +2722,24 @@ dueAt: dueAt
         }).forEach(function(row){
           var date=Date.parse(row.approvedAt);
           var dateText=Number.isFinite(date)?' • '+new Intl.DateTimeFormat('ar-SA-u-nu-latn',{year:'numeric',month:'short',day:'numeric'}).format(date):'';
-          card('✅ '+(row.taskTitle||'مهمة'),'معتمدة',
-            'المكافأة: '+(row.reward||'بدون مكافأة')+dateText);
+          var wasLate=wasApprovedLate(row);
+          card('✅ '+(row.taskTitle||'مهمة'),wasLate===true?'🔴 متأخرة ومعتمدة':'معتمدة',
+            'المكافأة: '+(row.reward||'بدون مكافأة')+dateText+
+            (wasLate===true?' • سُلّمت بعد الموعد':wasLate===false?' • سُلّمت في الوقت أو بلا موعد':''));
+        });
+      }
+      var lateTitle=document.createElement('h3');
+      lateTitle.textContent='🔴 المهام المتأخرة التي تم اعتمادها';
+      box.appendChild(lateTitle);
+      if(!approvedLate.length){
+        var noLate=document.createElement('p');
+        noLate.className='muted';
+        noLate.textContent='لا توجد تسليمات متأخرة ومعتمدة مسجلة.';
+        box.appendChild(noLate);
+      }else{
+        approvedLate.forEach(function(row){
+          card('✅ '+(row.taskTitle||'مهمة'),'متأخرة ومعتمدة',
+            'المكافأة: '+(row.reward||'—'));
         });
       }
     }
