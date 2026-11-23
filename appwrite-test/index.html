@@ -631,6 +631,9 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" class="chip" data-member-tab="tasks" aria-pressed="false">📋 سجل المهام</button>
       <button type="button" class="chip" data-member-tab="notes" aria-pressed="false">📝 ملاحظات المدير</button>
     </nav>
+    <div style="margin:12px 0 18px;display:flex;justify-content:flex-end">
+      <button id="remove-member-button" type="button" class="btn danger small">🗑️ إزالة العضو من المساحة</button>
+    </div>
     <div id="manager-member-content" class="report-items" aria-live="polite"></div>
   </main>
 </section>
@@ -2912,6 +2915,47 @@ dueAt: dueAt
     if(!button||!canViewReports()||state.view!=='member-profile')return;
     state.memberProfileTab=button.dataset.memberTab;renderManagerMemberProfile();
     if(state.memberProfileTab==='notes')fetchNotes(state.spaceId,state.memberProfileId);
+  });
+
+
+  // ---------- المرحلة التاسعة: إزالة عضو مع سبب إلزامي ----------
+  $('remove-member-button').addEventListener('click',function(){
+    if(!canViewReports()||state.view!=='member-profile')return;
+    var workspaceId=state.spaceId,memberId=state.memberProfileId;
+    if(!db.members.some(function(m){
+      return m.spaceId===workspaceId&&m.userId===memberId&&m.role!=='admin';
+    }))return toast('العضو غير موجود في المساحة');
+    var account=db.users.find(function(u){return u.id===memberId;});
+    var name=account?account.name:'العضو';
+    openModal('🗑️ إزالة عضو من المساحة',
+      '<p>ستتم إزالة <strong>'+esc(name)+'</strong> من المساحة وسحب تكليفاته الحالية. إنجازاته المعتمدة ومكافآته محفوظة، ويمكنه تقديم طلب انضمام جديد لاحقًا.</p>'+
+      '<label>سبب الإزالة (إلزامي)<textarea name="reason" maxlength="1000" rows="3" required placeholder="اكتب سبب الإزالة"></textarea></label>'+
+      '<label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="confirmRemoval" required style="width:auto;margin-top:4px">أؤكد أني أريد إزالة هذا العضو</label>',
+      async function(form){
+        if(state.spaceId!==workspaceId||!canViewReports())return toast('انتهت صلاحية هذه العملية');
+        var reason=String(form.get('reason')||'').trim();
+        if(!reason)return toast('يجب كتابة سبب الإزالة');
+        if(form.get('confirmRemoval')!=='on')return toast('يجب تأكيد الإزالة');
+        var submit=$('modal-form').querySelector('button[type="submit"]');
+        if(!submit||submit.disabled)return;
+        submit.disabled=true;
+        try{
+          await submissionAction({action:'removeMember',workspaceId:workspaceId,
+            memberId:memberId,reason:reason});
+          closeModal();
+          db.members=db.members.filter(function(m){
+            return !(m.spaceId===workspaceId&&m.userId===memberId);
+          });
+          save(db);
+          show('space');renderSpace();
+          refreshTasks(workspaceId,true);
+          refreshApprovedHistory(workspaceId);
+          toast('✅ تمت إزالة العضو وحُفظ السبب والسجل');
+        }catch(err){
+          submit.disabled=false;
+          toast('تعذرت الإزالة: '+String(err.message||err));
+        }
+      });
   });
 
   // ---------- المرحلة الثامنة: ملفي (المستخدم الحالي فقط) ----------
