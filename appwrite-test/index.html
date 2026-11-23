@@ -2654,7 +2654,7 @@ dueAt: dueAt
   function noteDate(value){
     var date=new Date(value||'');
     return Number.isNaN(date.getTime())?'—':
-      date.toLocaleString('ar-SA-u-ca-gregory-u-nu-latn',{
+      date.toLocaleString('ar-SA-u-ca-gregory-nu-latn',{
         year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit'
       });
   }
