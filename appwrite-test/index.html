@@ -606,6 +606,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <h2>👤 ملفي</h2>
       <p>ملخص مهامي وإنجازاتي ومكافآتي داخل هذه المساحة فقط.</p>
     </div>
+    <nav id="my-profile-tabs" class="member-profile-tabs" aria-label="أقسام ملفي">
+      <button type="button" class="chip active" data-my-profile-tab="summary" aria-pressed="true">📊 ملخص ملفي</button>
+      <button type="button" class="chip" data-my-profile-tab="notes" aria-pressed="false">📝 ملاحظات المدير</button>
+    </nav>
     <div id="profile-content" class="report-items" aria-live="polite"></div>
   </main>
 </section>
@@ -625,6 +629,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" class="chip active" data-member-tab="stats" aria-pressed="true">📊 الإحصائيات</button>
       <button type="button" class="chip" data-member-tab="rewards" aria-pressed="false">💰 المكافآت</button>
       <button type="button" class="chip" data-member-tab="tasks" aria-pressed="false">📋 سجل المهام</button>
+      <button type="button" class="chip" data-member-tab="notes" aria-pressed="false">📝 ملاحظات المدير</button>
     </nav>
     <div id="manager-member-content" class="report-items" aria-live="polite"></div>
   </main>
@@ -717,7 +722,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     });
   }
   var STATUS = { todo: 'لم تبدأ', doing: 'قيد التنفيذ', done: 'مكتملة' };
-  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null, myTasksView: false, memberProfileId: null, memberProfileTab: 'stats' };
+  var state = { view: 'auth', spaceId: null, filter: 'all', taskChatId: null, myTasksView: false, memberProfileId: null, memberProfileTab: 'stats', myProfileTab: 'summary' };
 
   function toast(msg) {
     var t = $('toast');
@@ -2640,6 +2645,175 @@ dueAt: dueAt
     });
   }
 
+
+  // ---------- المرحلة التاسعة: ملاحظات المدير، مصدرها Appwrite فقط ----------
+  var notesCache=Object.create(null);
+  function notesCacheKey(workspaceId,memberId){
+    return (me()?me().id:'guest')+':'+workspaceId+':'+memberId;
+  }
+  function noteDate(value){
+    var date=new Date(value||'');
+    return Number.isNaN(date.getTime())?'—':
+      date.toLocaleString('ar-SA-u-ca-gregory-u-nu-latn',{
+        year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit'
+      });
+  }
+  function rerenderNotes(workspaceId,memberId){
+    if(state.spaceId!==workspaceId)return;
+    if(state.view==='member-profile'&&state.memberProfileTab==='notes'&&
+       state.memberProfileId===memberId&&canViewReports())renderManagerMemberProfile();
+    else if(state.view==='profile'&&state.myProfileTab==='notes'&&
+       me()&&me().id===memberId)renderMyProfile();
+  }
+  async function fetchNotes(workspaceId,memberId){
+    if(!me()||!myMembership(workspaceId)||!memberId)return;
+    var viewerId=me().id,key=notesCacheKey(workspaceId,memberId);
+    notesCache[key]={loading:true};rerenderNotes(workspaceId,memberId);
+    try{
+      var result=await submissionAction({action:'listMemberNotes',
+        workspaceId:workspaceId,memberId:memberId});
+      if(!me()||me().id!==viewerId)return;
+      if(!Array.isArray(result.notes))throw Error('استجابة غير صحيحة من Appwrite');
+      notesCache[key]={rows:result.notes};
+    }catch(err){
+      if(!me()||me().id!==viewerId)return;
+      notesCache[key]={error:String(err.message||err)};
+    }
+    rerenderNotes(workspaceId,memberId);
+  }
+  function renderNotesList(box,memberId,asManager){
+    box.replaceChildren();
+    var intro=document.createElement('p');intro.className='muted';
+    intro.textContent=asManager?
+      'الملاحظات خاصة بك وبالعضو المقصود، ويمكن ربطها بمهمة سابقة.':
+      'ملاحظات المدير الموجهة إليك فقط. يمكنك قراءتها، دون تعديل أو رد.';
+    box.appendChild(intro);
+    if(asManager){
+      var add=document.createElement('button');add.type='button';
+      add.className='btn primary small';add.textContent='➕ إضافة ملاحظة';
+      add.dataset.noteAction='create';box.appendChild(add);
+    }
+    var data=notesCache[notesCacheKey(state.spaceId,memberId)];
+    if(!data||data.loading){
+      var loading=document.createElement('p');loading.className='report-empty';
+      loading.textContent='جارٍ تحميل الملاحظات…';box.appendChild(loading);return;
+    }
+    if(data.error){
+      var error=document.createElement('p');error.className='report-empty';
+      error.textContent='تعذر تحميل الملاحظات: '+data.error;
+      box.appendChild(error);
+      var retry=document.createElement('button');retry.type='button';retry.className='btn ghost small';
+      retry.dataset.noteAction='refresh';retry.textContent='🔄 إعادة المحاولة';box.appendChild(retry);
+      return;
+    }
+    if(!data.rows.length){
+      var empty=document.createElement('p');empty.className='report-empty';
+      empty.textContent='لا توجد ملاحظات من المدير حتى الآن.';
+      box.appendChild(empty);return;
+    }
+    data.rows.forEach(function(note){
+      var card=document.createElement('article');card.className='ranking-card';card.style.marginTop='12px';
+      var title=document.createElement('h3');
+      title.textContent=note.noteType==='task'?'📋 المهمة: '+(note.taskTitle||'مهمة'):'📝 ملاحظة عامة';
+      card.appendChild(title);
+      if(note.deleted===true){
+        var msg=document.createElement('p');msg.textContent='🗑️ تم حذف الملاحظة';
+        var deletedAt=document.createElement('p');deletedAt.className='muted';
+        deletedAt.textContent='📅 تاريخ ووقت الحذف: '+noteDate(note.updatedAt);
+        card.append(msg,deletedAt);
+      }else{
+        var body=document.createElement('p');body.textContent=note.content||'';
+        body.style.whiteSpace='pre-wrap';body.style.overflowWrap='anywhere';card.appendChild(body);
+        var when=document.createElement('p');when.className='muted';
+        when.textContent=note.edited?'✏️ معدّلة بتاريخ: '+noteDate(note.updatedAt):
+          '📅 كُتبت بتاريخ: '+noteDate(note.createdAt);
+        card.appendChild(when);
+        if(asManager){
+          var actions=document.createElement('div');actions.className='modal-actions';
+          var modify=document.createElement('button');modify.type='button';modify.className='btn ghost small';
+          modify.textContent='✏️ تعديل';modify.dataset.noteAction='edit';modify.dataset.noteId=note.id;
+          var remove=document.createElement('button');remove.type='button';remove.className='btn danger small';
+          remove.textContent='🗑️ حذف';remove.dataset.noteAction='delete';remove.dataset.noteId=note.id;
+          actions.append(modify,remove);card.appendChild(actions);
+        }
+      }
+      box.appendChild(card);
+    });
+  }
+  function noteTaskChoices(memberId){
+    var list=[{id:'',name:'📝 ملاحظة عامة عن العضو'}],seen=new Set();
+    function add(id,title){
+      if(!id||seen.has(id))return;
+      seen.add(id);list.push({id:id,name:title||'مهمة'});
+    }
+    db.tasks.filter(function(task){
+      return task.spaceId===state.spaceId&&
+        (task.assignees||[]).includes(memberId);
+    }).forEach(function(task){add(task.id,task.title);});
+    approvedHistoryForUser(memberId).forEach(function(row){add(row.taskId,row.taskTitle);});
+    return list;
+  }
+  function createNoteDialog(){
+    if(!canViewReports()||state.view!=='member-profile')return;
+    var workspaceId=state.spaceId,memberId=state.memberProfileId;
+    var choices=noteTaskChoices(memberId).map(function(item){
+      return '<option value="'+esc(item.id)+'">'+esc(item.name)+'</option>';
+    }).join('');
+    openModal('📝 إضافة ملاحظة',
+      '<label>مرتبطة بـ<select name="taskId">'+choices+'</select></label>'+
+      '<label>نص الملاحظة<textarea name="content" rows="5" maxlength="2000" required placeholder="اكتب ملاحظة المدير…"></textarea></label>',
+      async function(fd){
+        var content=String(fd.get('content')||'').trim();
+        if(!content)return toast('اكتب نص الملاحظة');
+        var submit=$('modal-form').querySelector('[type="submit"]');
+        if(submit.disabled)return;submit.disabled=true;
+        try{
+          await submissionAction({action:'createMemberNote',
+            workspaceId:workspaceId,memberId:memberId,
+            taskId:String(fd.get('taskId')||''),content:content});
+          closeModal();toast('✅ تم حفظ الملاحظة');await fetchNotes(workspaceId,memberId);
+        }catch(err){submit.disabled=false;toast('تعذر إضافة الملاحظة: '+err.message);}
+      });
+  }
+  function changeNoteDialog(action,noteId){
+    if(!canViewReports()||state.view!=='member-profile')return;
+    var workspaceId=state.spaceId,memberId=state.memberProfileId;
+    var stored=notesCache[notesCacheKey(workspaceId,memberId)];
+    var note=stored&&stored.rows&&stored.rows.find(function(n){return n.id===noteId&&!n.deleted;});
+    if(!note)return toast('الملاحظة غير متاحة');
+    var remove=action==='delete';
+    openModal(remove?'🗑️ حذف الملاحظة نهائيًا':'✏️ تعديل الملاحظة',
+      remove?'<p>هل تريد حذف الملاحظة؟ لن يمكن استرجاع النص، وسيظهر تاريخ الحذف ووقته للمدير والعضو.</p>':
+      '<label>نص الملاحظة<textarea name="content" rows="5" maxlength="2000" required>'+esc(note.content||'')+'</textarea></label>',
+      async function(fd){
+        var content=remove?'':String(fd.get('content')||'').trim();
+        if(!remove&&!content)return toast('اكتب نص الملاحظة');
+        var submit=$('modal-form').querySelector('[type="submit"]');
+        if(submit.disabled)return;submit.disabled=true;
+        try{
+          var payload={action:remove?'deleteMemberNote':'editMemberNote',
+            workspaceId:workspaceId,memberId:memberId,noteId:noteId};
+          if(!remove)payload.content=content;
+          await submissionAction(payload);
+          closeModal();toast(remove?'✅ تم حذف الملاحظة':'✅ تم تعديل الملاحظة');
+          await fetchNotes(workspaceId,memberId);
+        }catch(err){submit.disabled=false;toast('تعذر تنفيذ العملية: '+err.message);}
+      });
+  }
+  $('manager-member-content').addEventListener('click',function(event){
+    if(state.view!=='member-profile'||state.memberProfileTab!=='notes'||!canViewReports())return;
+    var btn=event.target.closest('[data-note-action]');if(!btn)return;
+    var action=btn.dataset.noteAction;
+    if(action==='create')createNoteDialog();
+    else if(action==='edit'||action==='delete')changeNoteDialog(action,btn.dataset.noteId);
+    else if(action==='refresh')fetchNotes(state.spaceId,state.memberProfileId);
+  });
+  $('profile-content').addEventListener('click',function(event){
+    var btn=event.target.closest('[data-note-action="refresh"]');
+    if(btn&&state.view==='profile'&&state.myProfileTab==='notes'&&me())
+      fetchNotes(state.spaceId,me().id);
+  });
+
   // ---------- المرحلة التاسعة: ملف عضو للمدير ----------
   function renderManagerMemberProfile(){
     if(!canViewReports()){show('space');toast('المدير فقط يستطيع عرض ملفات الأعضاء');return;}
@@ -2704,6 +2878,8 @@ dueAt: dueAt
       approved.forEach(function(row){
         card('✅ '+(row.taskTitle||'مهمة'),row.reward||'بدون مكافأة');
       });
+    }else if(state.memberProfileTab==='notes'){
+      renderNotesList(box,memberId,true);
     }else if(state.memberProfileTab==='tasks'){
       var head=document.createElement('h3');head.textContent='📋 المهام الحالية';box.appendChild(head);
       if(!current.length)card('المهام الحالية','لا توجد مهام غير معتمدة');
@@ -2735,6 +2911,7 @@ dueAt: dueAt
     var button=e.target.closest('[data-member-tab]');
     if(!button||!canViewReports()||state.view!=='member-profile')return;
     state.memberProfileTab=button.dataset.memberTab;renderManagerMemberProfile();
+    if(state.memberProfileTab==='notes')fetchNotes(state.spaceId,state.memberProfileId);
   });
 
   // ---------- المرحلة الثامنة: ملفي (المستخدم الحالي فقط) ----------
@@ -2746,6 +2923,16 @@ dueAt: dueAt
     if(!viewer || !membership){
       box.textContent='لا يمكن عرض الملف دون تسجيل الدخول إلى هذه المساحة.';
       return;
+    }
+    var isMember=membership.role!=='admin';
+    $('my-profile-tabs').classList.toggle('hidden',!isMember);
+    if(!isMember)state.myProfileTab='summary';
+    document.querySelectorAll('#my-profile-tabs [data-my-profile-tab]').forEach(function(btn){
+      var selected=btn.dataset.myProfileTab===state.myProfileTab;
+      btn.classList.toggle('active',selected);btn.setAttribute('aria-pressed',String(selected));
+    });
+    if(state.myProfileTab==='notes'){
+      renderNotesList(box,viewer.id,false);return;
     }
     function card(title,value,detail){
       var article=document.createElement('article');
@@ -2883,8 +3070,15 @@ dueAt: dueAt
       });
     }
   }
+  $('my-profile-tabs').addEventListener('click',function(event){
+    var button=event.target.closest('[data-my-profile-tab]');
+    if(!button||state.view!=='profile'||!me())return;
+    state.myProfileTab=button.dataset.myProfileTab;renderMyProfile();
+    if(state.myProfileTab==='notes')fetchNotes(state.spaceId,me().id);
+  });
   $('show-my-profile').addEventListener('click',function(){
     if(!me()||!myMembership(state.spaceId))return;
+    state.myProfileTab='summary';
     show('profile');
     renderMyProfile();
     refreshTasks(state.spaceId,true);
