@@ -439,6 +439,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
  <button class="btn ghost" id="back-btn">↩️ رجوع</button>
     </div>
     <div class="top-actions">
+      <button class="btn ghost small" id="show-my-profile" type="button">👤 ملفي</button>
       <span id="space-role" class="badge"></span>
     </div>
   </header>
@@ -589,6 +590,23 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
   </main>
 </section>
 
+<!-- الملف الشخصي لكل عضو: بياناته الخاصة فقط -->
+<section id="profile-screen" class="screen report-screen">
+  <header class="topbar">
+    <div class="brand-small">
+      <button class="btn ghost" type="button" data-back-to-space>↩️ رجوع للغرفة</button>
+      <strong>👤 ملفي</strong>
+    </div>
+  </header>
+  <main class="container">
+    <div class="report-hero">
+      <h2>👤 ملفي</h2>
+      <p>ملخص مهامي وإنجازاتي ومكافآتي داخل هذه المساحة فقط.</p>
+    </div>
+    <div id="profile-content" class="report-items" aria-live="polite"></div>
+  </main>
+</section>
+
 <!-- نوافذ حوارية -->
 <div class="modal hidden" id="modal">
   <div class="modal-card">
@@ -685,10 +703,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     toast._t = setTimeout(function () { t.classList.remove('show'); }, 2200);
   }
   function show(view) {
-    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen', 'pending-screen'].forEach(function (id) {
+    ['auth-screen', 'spaces-screen', 'space-screen', 'achievements-screen', 'ranking-screen', 'rewards-screen', 'pending-screen', 'profile-screen'].forEach(function (id) {
       $(id).classList.remove('active');
     });
-    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen' };
+    var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen', profile:'profile-screen' };
     $(map[view]).classList.add('active');
     state.view = view;
     if (view !== 'space') {
@@ -1492,6 +1510,7 @@ loadRoomMessages();
         if (state.view==='ranking') renderRanking();
         if (state.view==='rewards') renderRewards();
         if (state.view==='pending') renderPendingSubmissions();
+        if (state.view==='profile') renderMyProfile();
       }
       if(state.view==='spaces')renderSpaces();
     } catch(err) {
@@ -2497,6 +2516,7 @@ dueAt: dueAt
           if(state.view==='achievements')renderAchievements();
           if(state.view==='ranking')renderRanking();
           if(state.view==='rewards')renderRewards();
+          if(state.view==='profile')renderMyProfile();
         }
       }
     })();
@@ -2591,7 +2611,129 @@ dueAt: dueAt
       box.appendChild(card);
     });
   }
-  // عرض المكافآت: مالية بالريال أو هدايا، بلا نقاط.
+  // ---------- المرحلة الثامنة: ملفي (المستخدم الحالي فقط) ----------
+  function renderMyProfile(){
+    var box=$('profile-content');
+    box.replaceChildren();
+    var viewer=me();
+    var membership=myMembership(state.spaceId);
+    if(!viewer || !membership){
+      box.textContent='لا يمكن عرض الملف دون تسجيل الدخول إلى هذه المساحة.';
+      return;
+    }
+    function card(title,value,detail){
+      var article=document.createElement('article');
+      article.className='ranking-card';
+      article.style.marginBottom='12px';
+      var head=document.createElement('div');
+      head.className='rank-head';
+      var label=document.createElement('strong');label.textContent=title;
+      var number=document.createElement('span');number.className='rank-number';number.textContent=value;
+      head.append(label,number);
+      article.appendChild(head);
+      if(detail){var p=document.createElement('p');p.className='muted';p.textContent=detail;article.appendChild(p);}
+      box.appendChild(article);
+      return article;
+    }
+    var profileTitle=document.createElement('h3');
+    profileTitle.textContent='👤 '+viewer.name;
+    box.appendChild(profileTitle);
+    var mine=db.tasks.filter(function(task){
+      return task.spaceId===state.spaceId && Array.isArray(task.assignees) &&
+        task.assignees.includes(viewer.id) && canViewTask(task);
+    });
+    var pending=0,returned=0,late=0,notSubmitted=0;
+    var activeDetails=[];
+    var now=Date.now();
+    mine.forEach(function(task){
+      var submission=task.submissions && task.submissions[viewer.id];
+      var status=submission && submission.status || 'none';
+      if(status==='approved')return;
+      if(status==='pending')pending++;
+      else if(status==='returned')returned++;
+      else notSubmitted++;
+      var due=task.dueAt ? Date.parse(task.dueAt) : NaN;
+      var isLate=Number.isFinite(due) && due < now;
+      if(isLate)late++;
+      var label=status==='pending'?'بانتظار اعتماد المدير':
+        status==='returned'?'أعيدت للتعديل':'لم تُسلّم بعد';
+      if(isLate)label+=' • متأخرة';
+      activeDetails.push({title:task.title,label:label});
+    });
+    var history=currentApprovedHistory();
+    var isLoaded=!!(history&&Array.isArray(history.rows));
+    var approved=isLoaded ? approvedHistoryForUser(viewer.id) : [];
+    card('✅ تسليمات معتمدة',isLoaded?String(approved.length):'…',
+      isLoaded?'سجل دائم للإنجازات المعتمدة':'جارٍ تحميل سجل الإنجازات من Appwrite');
+    card('📤 بانتظار الاعتماد',String(pending),'تسليمات أرسلتها ولم يعتمدها المدير بعد');
+    card('🔄 أعيدت للتعديل',String(returned),'تسليمات طلب المدير إعادة العمل عليها');
+    card('⏰ مهام متأخرة حاليًا',String(late),
+      'مهام تجاوز موعدها ولم تُعتمد بعد؛ لا يشمل الإحصاء المهام المعتمدة سابقًا');
+    card('📝 لم تُسلّم بعد',String(notSubmitted),'مهام مكلّف بها ولم ترسل تسليمها');
+
+    var rewardTitle=document.createElement('h3');
+    rewardTitle.textContent='💰 مكافآتي المعتمدة';
+    box.appendChild(rewardTitle);
+    if(!isLoaded){
+      var loading=document.createElement('p');
+      loading.className='muted';
+      loading.textContent=history&&history.error?'تعذر تحميل المكافآت: '+history.error:'جارٍ تحميل المكافآت…';
+      box.appendChild(loading);
+    }else{
+      var currencies=new Map(),gifts=[];
+      approved.forEach(function(row){
+        var parts=rewardParts(row.reward);
+        if(parts.type==='money' && Number.isFinite(parts.amount)){
+          currencies.set(parts.currency,(currencies.get(parts.currency)||0)+parts.amount);
+        }else if(parts.type==='gift'){gifts.push({name:parts.gift,task:row.taskTitle});}
+      });
+      var sums=Array.from(currencies,function(entry){
+        return fmtAmount(entry[1])+' '+entry[0];
+      }).join(' + ') || '0 ريال';
+      card('💰 مبالغ مالية',sums,'كل عملة تُجمع منفصلة دون تحويل العملات');
+      card('🎁 هدايا',gifts.length?String(gifts.length)+' هدايا':'لا يوجد',
+        gifts.length?gifts.map(function(g){return g.name+' ('+(g.task||'مهمة')+')';}).join('، '):'لا توجد هدايا معتمدة');
+      var approvedTitle=document.createElement('h3');
+      approvedTitle.textContent='🏆 سجل إنجازاتي المعتمدة';
+      box.appendChild(approvedTitle);
+      if(!approved.length){
+        var empty=document.createElement('p');empty.className='muted';
+        empty.textContent='ما عندك تسليمات معتمدة حتى الآن.';
+        box.appendChild(empty);
+      }else{
+        approved.slice().sort(function(a,b){
+          return (Date.parse(b.approvedAt)||0)-(Date.parse(a.approvedAt)||0);
+        }).forEach(function(row){
+          var date=Date.parse(row.approvedAt);
+          var dateText=Number.isFinite(date)?' • '+new Intl.DateTimeFormat('ar-SA-u-nu-latn',{year:'numeric',month:'short',day:'numeric'}).format(date):'';
+          card('✅ '+(row.taskTitle||'مهمة'),'معتمدة',
+            'المكافأة: '+(row.reward||'بدون مكافأة')+dateText);
+        });
+      }
+    }
+
+    var currentTitle=document.createElement('h3');
+    currentTitle.textContent='📋 مهامي غير المعتمدة';
+    box.appendChild(currentTitle);
+    if(!activeDetails.length){
+      var noActive=document.createElement('p');noActive.className='muted';
+      noActive.textContent='ما عندك مهام تنتظر الإنجاز أو المراجعة حاليًا.';
+      box.appendChild(noActive);
+    }else{
+      activeDetails.forEach(function(task){
+        card('📌 '+task.title,task.label);
+      });
+    }
+  }
+  $('show-my-profile').addEventListener('click',function(){
+    if(!me()||!myMembership(state.spaceId))return;
+    show('profile');
+    renderMyProfile();
+    refreshTasks(state.spaceId,true);
+    refreshApprovedHistory(state.spaceId);
+  });
+
+  // عرض المكافآت: مالية بالعملة الأصلية أو هدايا، بلا نقاط.
   function parseReward(raw){
     var parts=rewardParts(raw),original=String(raw||'').trim();
     if(parts.type==='money')return {kind:'money',amount:parts.amount,currency:parts.currency,label:original};
