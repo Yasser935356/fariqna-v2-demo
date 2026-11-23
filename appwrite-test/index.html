@@ -2702,9 +2702,7 @@ dueAt: dueAt
         'كل عملة تُجمع منفصلة دون تحويل');
       card('🎁 الهدايا',gifts.length?gifts.length+' هدايا':'لا يوجد',gifts.join('، ')||'لا توجد هدايا معتمدة');
       approved.forEach(function(row){
-        var art=card('✅ '+(row.taskTitle||'مهمة'),row.reward||'بدون مكافأة');
-        var btn=document.createElement('button');btn.type='button';btn.className='btn ghost small';
-        btn.dataset.editMemberReward=row.id;btn.textContent='✏️ تعديل المكافأة';art.appendChild(btn);
+        card('✅ '+(row.taskTitle||'مهمة'),row.reward||'بدون مكافأة');
       });
     }else if(state.memberProfileTab==='tasks'){
       var head=document.createElement('h3');head.textContent='📋 المهام الحالية';box.appendChild(head);
@@ -2972,14 +2970,13 @@ dueAt: dueAt
           var result=await submissionAction({action:'updateMemberReward',historyId:record.id,reward:reward});
           if(!result.success)throw new Error(result.message||'تعذر تعديل المكافأة');
           record.reward=result.reward;
-          closeModal();renderRewards();if(state.view==='member-profile')renderManagerMemberProfile();toast('✅ تم تعديل مكافأة العضو');
+          closeModal();renderRewards();toast('✅ تم تعديل مكافأة العضو');
           await refreshApprovedHistory(state.spaceId);
         }catch(err){toast('تعذر تعديل المكافأة: '+err.message);submit.disabled=false;}
       });
     enableRewardFields('member-reward');
   }
   $('rewards-content').addEventListener('click',handleMemberRewardEdit);
-  $('manager-member-content').addEventListener('click',handleMemberRewardEdit);
   $('show-achievements').addEventListener('click',function(){
     if(!canViewReports())return toast('صفحة المدير فقط');
     show('achievements');renderAchievements();refreshTasks(state.spaceId,true);refreshApprovedHistory(state.spaceId);
