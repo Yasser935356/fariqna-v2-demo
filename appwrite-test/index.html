@@ -1587,6 +1587,7 @@ loadRoomMessages();
     // عرض «مهامي» للأعضاء فقط وداخل المساحة الحالية، دون تغيير صلاحيات الخادم.
     if (isAdmin) state.myTasksView = false;
     $('my-tasks-toggle').classList.toggle('hidden', isAdmin);
+    $('show-my-profile').classList.toggle('hidden', isAdmin);
     $('my-tasks-toggle').textContent = state.myTasksView ? '↩️ رجوع للغرفة' : '📋 مهامي';
     $('my-tasks-toggle').setAttribute('aria-pressed', String(state.myTasksView));
     $('tasks-heading').textContent = state.myTasksView ? '📋 مهامي في هذه المساحة' : '✅ المهام';
@@ -3254,7 +3255,7 @@ dueAt: dueAt
     if(state.myProfileTab==='notes')fetchNotes(state.spaceId,me().id);
   });
   $('show-my-profile').addEventListener('click',function(){
-    if(!me()||!myMembership(state.spaceId))return;
+    if(!me()||!myMembership(state.spaceId)||myMembership(state.spaceId).role==='admin')return;
     state.myProfileTab='summary';
     show('profile');
     renderMyProfile();
