@@ -559,6 +559,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
         <h3>👥 الأعضاء</h3>
           <ul id="members-list" class="members"></ul>
         </div>
+        <section id="former-members-panel" class="panel hidden" style="margin-top:16px">
+          <h3>📚 الأعضاء السابقون</h3>
+          <div id="former-members-content" aria-live="polite"></div>
+        </section>
       </aside>
     </div>
   </main>
@@ -1612,7 +1616,7 @@ loadRoomMessages();
     $('select-all-assignees').indeterminate = false;
     $('select-all-assignees').disabled = availableAssignees.length === 0;
 
-    renderTasks(); renderMembers();
+    renderTasks(); renderMembers(); renderFormerMembers();
     renderMemberExitsNotice();
   }
 
@@ -1656,7 +1660,7 @@ loadRoomMessages();
         toast('تعذر جلب رسائل المغادرة: '+String(err.message||err));
       return;
     }
-    if(state.spaceId===workspaceId&&state.view==='space')showExitNotices();
+    if(state.spaceId===workspaceId&&state.view==='space'){showExitNotices();renderFormerMembers();}
   }
   $('member-exits-notice-content').addEventListener('click',async function(event){
     var button=event.target.closest('[data-exit-id]');
@@ -1677,6 +1681,61 @@ loadRoomMessages();
       toast('تعذر تأكيد الاطلاع: '+String(err.message||err));
     }
   });
+
+  // ---------- المرحلة التاسعة: أرشيف الأعضاء السابقين ----------
+  function renderFormerMembers(){
+    var panel=$('former-members-panel'),box=$('former-members-content');
+    var m=myMembership(state.spaceId);
+    if(!m||m.role!=='admin'){
+      panel.classList.add('hidden');box.replaceChildren();return;
+    }
+    panel.classList.remove('hidden');box.replaceChildren();
+    var cache=exitNotices[exitNoticeKey(state.spaceId)];
+    if(!cache||!Array.isArray(cache.rows)){
+      var loading=document.createElement('p');loading.className='muted';
+      loading.textContent='جارٍ تحميل سجل الأعضاء السابقين…';box.appendChild(loading);return;
+    }
+    var active=new Set(cache.rows.filter(function(x){return x.isCurrentMember;}).map(function(x){return x.userId;}));
+    var seen=new Set();
+    var former=cache.rows.filter(function(x){
+      if(active.has(x.userId)||seen.has(x.userId))return false;
+      seen.add(x.userId);return true;
+    });
+    if(!former.length){
+      var empty=document.createElement('p');empty.className='muted';
+      empty.textContent='لا يوجد أعضاء سابقون حاليًا.';box.appendChild(empty);return;
+    }
+    var archive=currentApprovedHistory();
+    former.forEach(function(x){
+      var card=document.createElement('article');card.className='ranking-card';
+      card.style.marginTop='12px';
+      var name=document.createElement('h4');name.textContent='👤 '+(x.userName||'عضو سابق');
+      var type=document.createElement('p');type.textContent=x.exitType==='removed'?'🗑️ أزاله المدير':'🚪 غادر بنفسه';
+      var reason=document.createElement('p');reason.textContent='📝 السبب: '+String(x.reason||'—');
+      reason.style.overflowWrap='anywhere';reason.style.whiteSpace='pre-wrap';
+      var date=document.createElement('p');date.className='muted';date.textContent='📅 '+noteDate(x.exitedAt);
+      card.append(name,type,reason,date);
+      if(!archive||!Array.isArray(archive.rows)){
+        var wait=document.createElement('p');wait.textContent='⏳ جارٍ تحميل الإنجازات المعتمدة…';card.appendChild(wait);
+      }else{
+        var approved=approvedHistoryForUser(x.userId);
+        var count=document.createElement('p');count.textContent='🏆 الإنجازات المعتمدة: '+approved.length;
+        card.appendChild(count);
+        if(approved.length){
+          var details=document.createElement('details');
+          var summary=document.createElement('summary');summary.textContent='🎁 عرض المكافآت والمهام المحفوظة';
+          details.appendChild(summary);
+          approved.forEach(function(a){
+            var line=document.createElement('p');line.style.overflowWrap='anywhere';
+            line.textContent='✅ '+String(a.taskTitle||'مهمة')+' — '+String(a.reward||'بدون مكافأة');
+            details.appendChild(line);
+          });
+          card.appendChild(details);
+        }
+      }
+      box.appendChild(card);
+    });
+  }
   function renderMemberExitsNotice(){showExitNotices();}
 
   // التبديل بين عرض المساحة العادي وعرض المهام المختصر للعضو المكلّف.
@@ -2619,7 +2678,7 @@ dueAt: dueAt
       }finally{
         delete approvedHistoryRequests[key];
         if(state.spaceId===workspaceId && me() && me().id===viewer.id){
-          if(state.view==='space')renderTasks();
+          if(state.view==='space'){renderTasks();renderFormerMembers();}
           if(state.view==='achievements')renderAchievements();
           if(state.view==='ranking')renderRanking();
           if(state.view==='rewards')renderRewards();
@@ -3022,6 +3081,7 @@ dueAt: dueAt
           show('space');renderSpace();
           refreshTasks(workspaceId,true);
           refreshApprovedHistory(workspaceId);
+          fetchMemberExitsNotice(workspaceId);
           toast('✅ تمت إزالة العضو وحُفظ السبب والسجل');
         }catch(err){
           submit.disabled=false;
