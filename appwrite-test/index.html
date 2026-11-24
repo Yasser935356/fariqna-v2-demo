@@ -467,6 +467,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       </div>
     </div>
 
+    <section id="manager-join-requests" class="panel hidden" style="margin:12px 0 20px" aria-label="طلبات الانضمام">
+      <h3>📩 طلبات الانضمام</h3>
+      <div id="manager-join-requests-content" aria-live="polite"></div>
+    </section>
     <section id="member-exits-notice" class="panel hidden" aria-live="polite" style="margin:12px 0 24px;border:2px solid #dcd6ff">
       <h3>📨 رسائل مغادرة الأعضاء</h3>
       <div id="member-exits-notice-content"></div>
@@ -1426,6 +1430,7 @@ loadRoomMessages();
   if(myMembership(id)&&myMembership(id).role==='admin'){
     fetchMemberExitsNotice(id);
     refreshInviteForManager(id);
+    fetchManagerJoinRequests(id);
   }
 
 }
@@ -1601,6 +1606,7 @@ loadRoomMessages();
 
     renderTasks(); renderMembers(); renderFormerMembers();
     renderMemberExitsNotice();
+    renderManagerJoinRequests();
   }
 
 
@@ -1719,6 +1725,96 @@ loadRoomMessages();
       box.appendChild(card);
     });
   }
+
+  // ---------- طلبات الانضمام للمدير ----------
+  var managerJoinCache=Object.create(null),managerJoinBusy=Object.create(null);
+  function managerJoinKey(wid){return (me()?me().id:'guest')+':'+wid;}
+  function renderManagerJoinRequests(){
+    var panel=$('manager-join-requests'),box=$('manager-join-requests-content');
+    if(!canViewReports()){panel.classList.add('hidden');box.replaceChildren();return;}
+    var cache=managerJoinCache[managerJoinKey(state.spaceId)];
+    panel.classList.remove('hidden');
+    box.replaceChildren();
+    if(!cache||cache.error){
+      var p=document.createElement('p');p.className='muted';
+      p.textContent=cache&&cache.error?'تعذر تحميل الطلبات. ستتم إعادة المحاولة.':'جارٍ تحميل طلبات الانضمام…';
+      box.appendChild(p);return;
+    }
+    var pending=cache.rows.filter(function(row){return row.status==='pending'&&Date.parse(row.expiresAt)>Date.now();});
+    if(!pending.length){
+      var empty=document.createElement('p');empty.className='muted';
+      empty.textContent='لا توجد طلبات انضمام معلّقة.';box.appendChild(empty);return;
+    }
+    pending.forEach(function(row){
+      var card=document.createElement('article');card.className='ranking-card';card.style.marginTop='12px';
+      card.dataset.joinRequestCard=row.id;
+      var name=document.createElement('h4');name.textContent='👤 '+(row.userName||'عضو');
+      var time=document.createElement('p');time.className='muted';
+      time.textContent='ينتهي الطلب في: '+noteDate(row.expiresAt);
+      var countdown=document.createElement('p');countdown.className='muted';countdown.dataset.joinExpires=row.expiresAt;
+      var actions=document.createElement('div');actions.className='modal-actions';
+      ['approve','reject'].forEach(function(decision){
+        var b=document.createElement('button');b.type='button';
+        b.className=decision==='approve'?'btn primary small':'btn danger small';
+        b.textContent=decision==='approve'?'✅ قبول':'رفض';
+        b.dataset.joinDecision=decision;b.dataset.joinRequestId=row.id;actions.appendChild(b);
+      });
+      card.append(name,time,countdown,actions);box.appendChild(card);
+    });
+    tickManagerJoinRequests();
+  }
+  function tickManagerJoinRequests(){
+    if(state.view!=='space'||!canViewReports())return;
+    $('manager-join-requests-content').querySelectorAll('[data-join-expires]').forEach(function(node){
+      var seconds=Math.ceil((Date.parse(node.dataset.joinExpires)-Date.now())/1000);
+      if(seconds<=0){node.closest('[data-join-request-card]').remove();return;}
+      node.textContent='⏳ متبقٍ '+Math.floor(seconds/3600)+':'+String(Math.floor(seconds%3600/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');
+    });
+  }
+  async function fetchManagerJoinRequests(wid){
+    var u=me(),m=myMembership(wid);
+    if(!u||!m||m.role!=='admin')return;
+    var key=managerJoinKey(wid),viewer=u.id;
+    if(managerJoinBusy[key])return;
+    managerJoinBusy[key]=true;
+    try{
+      var result=await submissionAction({action:'listJoinRequests',workspaceId:wid});
+      if(!me()||me().id!==viewer||!myMembership(wid)||myMembership(wid).role!=='admin')return;
+      if(!Array.isArray(result.requests))throw Error('استجابة غير صالحة');
+      managerJoinCache[key]={rows:result.requests};
+    }catch(e){managerJoinCache[key]={error:true};}
+    finally{
+      delete managerJoinBusy[key];
+      if(me()&&me().id===viewer&&state.view==='space'&&state.spaceId===wid)renderManagerJoinRequests();
+    }
+  }
+  $('manager-join-requests-content').addEventListener('click',function(ev){
+    var btn=ev.target.closest('[data-join-decision]');
+    if(!btn||btn.disabled||state.view!=='space'||!canViewReports())return;
+    var wid=state.spaceId,key=managerJoinKey(wid),viewer=me().id;
+    var id=btn.dataset.joinRequestId,decision=btn.dataset.joinDecision;
+    var record=managerJoinCache[key];
+    var row=record&&record.rows&&record.rows.find(function(item){return item.id===id;});
+    if(!row||Date.parse(row.expiresAt)<=Date.now())return fetchManagerJoinRequests(wid);
+    var verb=decision==='approve'?'قبول':'رفض';
+    openModal(verb+' طلب الانضمام','<p>هل أنت متأكد من '+verb+' طلب انضمام '+esc(row.userName||'العضو')+'؟</p>',async function(){
+      if(!me()||me().id!==viewer||state.spaceId!==wid||!canViewReports())return;
+      var submit=$('modal-form').querySelector('[type="submit"]');
+      if(!submit||submit.disabled)return;submit.disabled=true;
+      try{
+        var result=await submissionAction({action:'reviewJoinRequest',workspaceId:wid,requestId:id,decision:decision});
+        closeModal();
+        if(managerJoinCache[key]&&managerJoinCache[key].rows)
+          managerJoinCache[key].rows=managerJoinCache[key].rows.filter(function(item){return item.id!==id;});
+        renderManagerJoinRequests();
+        toast(result.message||'تم تسجيل القرار');
+        openSpace(wid);
+      }catch(err){submit.disabled=false;toast('تعذر تنفيذ القرار: '+String(err.message||err));fetchManagerJoinRequests(wid);}
+    });
+  });
+  setInterval(tickManagerJoinRequests,1000);
+  setInterval(function(){if(state.view==='space'&&canViewReports())fetchManagerJoinRequests(state.spaceId);},20000);
+
   function renderMemberExitsNotice(){showExitNotices();}
 
   // التبديل بين عرض المساحة العادي وعرض المهام المختصر للعضو المكلّف.
