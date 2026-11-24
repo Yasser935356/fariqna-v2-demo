@@ -611,6 +611,9 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" class="chip" data-my-profile-tab="notes" aria-pressed="false">📝 ملاحظات المدير</button>
     </nav>
     <div id="profile-content" class="report-items" aria-live="polite"></div>
+    <div id="leave-workspace-panel" class="hidden" style="margin:22px 0 28px;display:flex;justify-content:flex-end">
+      <button id="leave-workspace-button" type="button" class="btn danger small">🚪 مغادرة المساحة</button>
+    </div>
   </main>
 </section>
 
@@ -2969,6 +2972,7 @@ dueAt: dueAt
       return;
     }
     var isMember=membership.role!=='admin';
+    $('leave-workspace-panel').classList.toggle('hidden',!isMember);
     $('my-profile-tabs').classList.toggle('hidden',!isMember);
     if(!isMember)state.myProfileTab='summary';
     document.querySelectorAll('#my-profile-tabs [data-my-profile-tab]').forEach(function(btn){
@@ -3127,6 +3131,45 @@ dueAt: dueAt
     renderMyProfile();
     refreshTasks(state.spaceId,true);
     refreshApprovedHistory(state.spaceId);
+  });
+
+  // ---------- المرحلة التاسعة: مغادرة العضو بمحض إرادته ----------
+  $('leave-workspace-button').addEventListener('click',function(){
+    var membership=myMembership(state.spaceId);
+    if(!me()||!membership||membership.role==='admin'||state.view!=='profile')return;
+    var workspaceId=state.spaceId,viewerId=me().id;
+    openModal('🚪 مغادرة المساحة',
+      '<p>سيتم سحب تكليفاتك الحالية، بينما تظل إنجازاتك المعتمدة ومكافآتك محفوظة. يمكنك الانضمام مجددًا لاحقًا وفق نظام الدعوات.</p>'+
+      '<label>سبب المغادرة (إلزامي)<textarea name="reason" maxlength="1000" rows="3" required placeholder="اكتب سبب المغادرة"></textarea></label>'+
+      '<label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="confirmLeave" required style="width:auto;margin-top:4px">أؤكد أني أريد مغادرة المساحة</label>',
+      async function(form){
+        if(!me()||me().id!==viewerId||state.spaceId!==workspaceId||
+          !myMembership(workspaceId)||myMembership(workspaceId).role==='admin'){
+          return toast('انتهت صلاحية العملية');
+        }
+        var reason=String(form.get('reason')||'').trim();
+        if(!reason)return toast('يجب كتابة سبب المغادرة');
+        if(form.get('confirmLeave')!=='on')return toast('يجب تأكيد المغادرة');
+        var submit=$('modal-form').querySelector('button[type="submit"]');
+        if(!submit||submit.disabled)return;submit.disabled=true;
+        try{
+          await submissionAction({action:'leaveWorkspace',workspaceId:workspaceId,reason:reason});
+          closeModal();
+          db.members=db.members.filter(function(m){
+            return !(m.spaceId===workspaceId&&m.userId===viewerId);
+          });
+          db.tasks=db.tasks.filter(function(t){return t.spaceId!==workspaceId;});
+          if(db.syncedTaskIds)delete db.syncedTaskIds[workspaceId];
+          save(db);
+          state.spaceId=null;
+          show('spaces');
+          renderSpaces();
+          toast('✅ تمت مغادرة المساحة وحُفظ سبب المغادرة');
+        }catch(err){
+          submit.disabled=false;
+          toast('تعذرت المغادرة: '+String(err.message||err));
+        }
+      });
   });
 
   // عرض المكافآت: مالية بالعملة الأصلية أو هدايا، بلا نقاط.
