@@ -432,6 +432,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
 </div>
     <div id="spaces-list" class="grid"></div>
     <p id="spaces-empty" class="empty hidden">لا توجد مساحات بعد. أنشئ مساحة جديدة أو انضم إلى مساحة بالرمز.</p>
+    <section id="my-join-requests" class="panel hidden" style="margin-top:18px">
+      <h3>📩 طلبات الانضمام الخاصة بي</h3>
+      <div id="my-join-requests-list" aria-live="polite"></div>
+    </section>
   </main>
 </section>
 
@@ -756,6 +760,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     var map = { auth:'auth-screen', spaces:'spaces-screen', space:'space-screen', achievements:'achievements-screen', ranking:'ranking-screen', rewards:'rewards-screen', pending:'pending-screen', profile:'profile-screen', 'member-profile':'member-profile-screen' };
     $(map[view]).classList.add('active');
     state.view = view;
+    if(view==='spaces'&&me()){renderMyJoinRequests();refreshMyJoinRequests();}
     if (view !== 'space') {
       $('task-chat-modal').classList.add('hidden');
       state.taskChatId = null;
@@ -994,6 +999,7 @@ testPushBtn.addEventListener('click', async function () {
   $('logout-btn').addEventListener('click', async function () {
     try {
       await account.deleteSession({ sessionId: 'current' });
+       if(me())delete myJoinCache[me().id];
        db.session = null;
        db.tasks = [];
        db.syncedTaskIds = {};
@@ -1129,6 +1135,130 @@ function enterApp() {
     });
     $('spaces-empty').classList.toggle('hidden', mine.length > 0);
   }
+
+  // ---------- حالة طلبات الانضمام الخاصة بالمستخدم ----------
+  var myJoinCache=Object.create(null),myJoinBusy=Object.create(null);
+  var myJoinOpenBusy=false;
+  function joinTimeLeft(value){
+    var secs=Math.max(0,Math.ceil((Date.parse(value)-Date.now())/1000));
+    if(!Number.isFinite(secs))return '—';
+    return Math.floor(secs/3600)+':'+String(Math.floor(secs%3600/60)).padStart(2,'0')+':'+String(secs%60).padStart(2,'0');
+  }
+  function requestState(row){
+    if(row.status==='pending'&&Date.parse(row.expiresAt)<=Date.now())return 'expired';
+    return row.status;
+  }
+  function renderMyJoinRequests(){
+    var panel=$('my-join-requests'),list=$('my-join-requests-list'),user=me();
+    if(!user||state.view!=='spaces'){panel.classList.add('hidden');list.replaceChildren();return;}
+    var cache=myJoinCache[user.id];
+    if(!cache){panel.classList.add('hidden');list.replaceChildren();return;}
+    if(cache.error&&!cache.rows){panel.classList.remove('hidden');list.textContent='تعذر تحميل طلبات الانضمام. ستتم إعادة المحاولة تلقائيًا.';return;}
+    var rows=(cache.rows||[]).filter(function(row){return row.status!=='approved'||row.isCurrentMember===true;});
+    panel.classList.toggle('hidden',rows.length===0);
+    list.replaceChildren();
+    rows.forEach(function(row){
+      var card=document.createElement('article');card.className='ranking-card';card.style.marginTop='12px';
+      var name=document.createElement('h4');name.textContent='🏠 '+(row.workspaceName||'مساحة');
+      var status=document.createElement('p'),date=document.createElement('p'),timer=document.createElement('p');
+      date.className='muted';timer.className='muted';
+      var label=requestState(row);
+      card.appendChild(name);
+      if(label==='approved'&&row.isCurrentMember===true){
+        var seenKey='fariqna-v2:join-approved-seen:'+user.id+':'+row.id+':'+String(row.reviewedAt||'');
+        var seen=false;
+        try{seen=localStorage.getItem(seenKey)==='1';if(!seen)localStorage.setItem(seenKey,'1');}catch(_){}
+        if(!seen){status.textContent='🎉 تمت الموافقة على طلب انضمامك إلى المساحة.';card.appendChild(status);}
+        var button=document.createElement('button');button.type='button';button.className='btn primary small';
+        button.textContent='دخول المساحة';button.dataset.approvedJoin=row.workspaceId;
+        card.appendChild(button);
+      }else if(label==='pending'){
+        status.textContent='⏳ طلبك بانتظار موافقة مدير المساحة.';
+        date.textContent='ينتهي الطلب في: '+noteDate(row.expiresAt);
+        timer.dataset.myJoinExpiry=row.expiresAt;
+        timer.textContent='الوقت المتبقي: '+joinTimeLeft(row.expiresAt);
+        card.append(status,date,timer);
+      }else if(label==='rejected'){
+        status.textContent='لم تتم الموافقة على طلب الانضمام.';
+        if(Date.parse(row.nextEligibleAt)>Date.now()){
+          date.textContent='يمكنك إعادة التقديم في: '+noteDate(row.nextEligibleAt);
+          timer.dataset.myJoinRetry=row.nextEligibleAt;
+          timer.textContent='الوقت المتبقي: '+joinTimeLeft(row.nextEligibleAt);
+        }else{date.textContent='يمكنك الآن تقديم طلب جديد باستخدام رمز دعوة ساري.';}
+        card.append(status,date,timer);
+      }else{
+        status.textContent='انتهت صلاحية طلب الانضمام.';
+        date.textContent='يمكنك تقديم طلب جديد باستخدام رمز دعوة ساري.';
+        card.append(status,date);
+      }
+      list.appendChild(card);
+    });
+  }
+  function tickMyJoinRequests(){
+    if(state.view!=='spaces'||!me())return;
+    var needsRender=false;
+    $('my-join-requests-list').querySelectorAll('[data-my-join-expiry],[data-my-join-retry]').forEach(function(node){
+      var time=node.dataset.myJoinExpiry||node.dataset.myJoinRetry;
+      if(Date.parse(time)<=Date.now()){needsRender=true;return;}
+      node.textContent='الوقت المتبقي: '+joinTimeLeft(time);
+    });
+    if(needsRender)renderMyJoinRequests();
+  }
+  async function refreshMyJoinRequests(){
+    var u=me();if(!u||state.view!=='spaces'||myJoinBusy[u.id])return;
+    var viewer=u.id;myJoinBusy[viewer]=true;
+    try{
+      var result=await submissionAction({action:'listMyJoinRequests'});
+      if(!me()||me().id!==viewer)return;
+      if(!Array.isArray(result.requests))throw Error('استجابة غير صالحة');
+      var prior=myJoinCache[viewer];
+      var signature=JSON.stringify(result.requests);
+      myJoinCache[viewer]={rows:result.requests,signature:signature};
+      // لا نعيد رسم الأزرار أو رسائل الموافقة ما لم تتغير البيانات.
+      if(!prior||prior.signature!==signature||prior.error)renderMyJoinRequests();
+      if(result.requests.some(function(row){return row.status==='approved'&&row.isCurrentMember&&!myMembership(row.workspaceId);}))
+        await syncMyApprovedWorkspaces(viewer);
+    }catch(err){
+      if(me()&&me().id===viewer){
+        var prev=myJoinCache[viewer];
+        myJoinCache[viewer]={rows:prev&&prev.rows,error:true};
+        if(!prev||!prev.rows)renderMyJoinRequests();
+      }
+    }finally{delete myJoinBusy[viewer];}
+  }
+  async function syncMyApprovedWorkspaces(viewer){
+    var result=await submissionAction({action:'listWorkspaces'});
+    if(!me()||me().id!==viewer)return;
+    if(!Array.isArray(result.workspaces))throw Error('تعذر استرجاع المساحات');
+    result.workspaces.forEach(function(space){
+      var existing=db.spaces.find(function(x){return x.id===space.id;});
+      if(existing)Object.assign(existing,space);else db.spaces.push(Object.assign({},space));
+      var membership=db.members.find(function(m){return m.spaceId===space.id&&m.userId===viewer;});
+      if(membership)membership.role=space.role;
+      else db.members.push({id:uid(),spaceId:space.id,userId:viewer,role:space.role});
+    });
+    save(db);
+    if(state.view==='spaces'){renderSpaces();result.workspaces.forEach(function(space){refreshTasks(space.id,true);});}
+  }
+  $('my-join-requests-list').addEventListener('click',async function(event){
+    var button=event.target.closest('[data-approved-join]');
+    if(!button||myJoinOpenBusy||state.view!=='spaces'||!me())return;
+    var viewer=me().id,workspaceId=button.dataset.approvedJoin;
+    button.disabled=true;myJoinOpenBusy=true;
+    try{
+      await syncMyApprovedWorkspaces(viewer);
+      if(!me()||me().id!==viewer||state.view!=='spaces')return;
+      if(!myMembership(workspaceId))throw Error('العضوية غير متاحة حاليًا');
+      openSpace(workspaceId);
+    }catch(err){toast('تعذر دخول المساحة: '+String(err.message||err));}
+    finally{myJoinOpenBusy=false;button.disabled=false;}
+  });
+  setInterval(tickMyJoinRequests,1000);
+  setInterval(refreshMyJoinRequests,10000);
+  document.addEventListener('visibilitychange',function(){
+    if(!document.hidden&&me()&&state.view==='spaces')refreshMyJoinRequests();
+  });
+
   // ---------- إعدادات المساحة ----------
   $('edit-space-btn').addEventListener('click', function () {
     var space = db.spaces.find(function (s) {
@@ -1340,6 +1470,12 @@ $('join-space-btn').addEventListener('click',function(){
       try{
         var result=await submissionAction({action:'requestJoinWorkspace',code:code});
         closeModal();
+        if(result.request&&me()){
+          var cache=myJoinCache[me().id];
+          var rows=(cache&&cache.rows||[]).filter(function(row){return row.workspaceId!==result.request.workspaceId;});
+          rows.push(result.request);myJoinCache[me().id]={rows:rows};renderMyJoinRequests();
+        }
+        refreshMyJoinRequests();
         if(result.status==='member'){
           toast('أنت عضو في هذه المساحة بالفعل');
           enterApp();
@@ -1351,6 +1487,7 @@ $('join-space-btn').addEventListener('click',function(){
       }catch(err){
         button.disabled=false;
         toast('تعذر إرسال الطلب: '+String(err.message||err));
+        refreshMyJoinRequests();
       }
     }
   );
