@@ -1323,97 +1323,31 @@ function enterApp() {
     });
   });
 
-$('join-space-btn').addEventListener('click', function () {
-  openModal(
-    'الانضمام برمز',
+// ---------- طلب الانضمام يحتاج موافقة مدير المساحة ----------
+$('join-space-btn').addEventListener('click',function(){
+  openModal('طلب الانضمام إلى مساحة',
+    '<p class="muted">بعد إرسال الطلب، يلزم موافقة مدير المساحة قبل الدخول.</p>'+
     '<label>رمز الدعوة<input name="code" required maxlength="6" dir="ltr" style="text-transform:uppercase"></label>',
-    function (fd) {
-
-      var c = String(fd.get('code') || '').trim().toUpperCase();
-
-      if (!/^[A-HJ-NP-Z2-9]{6}$/.test(c)) {
-        toast('رمز الدعوة يجب أن يكون 6 خانات صحيحة');
-        return;
-      }
-
-      var btn = $('modal-form').querySelector('[type="submit"]');
-
-      if (btn.disabled) return;
-      btn.disabled = true;
-
-      var functions = new Appwrite.Functions(window.fariqna.client);
-
-      functions.createExecution({
-        functionId: "6afc936d003ba906e93f",
-        body: JSON.stringify({
-          action: "joinWorkspace",
-          code: c
-        }),
-        async: false,
-        headers: {
-          "content-type": "application/json"
-        }
-      }).then(function (execution) {
-
-        var result = JSON.parse(execution.responseBody || "{}");
-
-        if (!result.success || !result.workspace) {
-          throw new Error(result.message || "تعذر الانضمام إلى الغرفة");
-        }
-
-        var space = result.workspace;
-
-        var existing = db.spaces.find(function (s) {
-          return s.id === space.id;
-        });
-
-        if (existing) {
-          existing.name = space.name;
-          existing.desc = space.desc;
-          existing.adminId = space.adminId;
-        } else {
-          db.spaces.push({
-            id: space.id,
-            name: space.name,
-            desc: space.desc,
-            code: "",
-            adminId: space.adminId
-          });
-        }
-
-        var membership = db.members.find(function (m) {
-          return m.spaceId === space.id &&
-                 m.userId === me().id;
-        });
-
-        if (membership) {
-          membership.role = space.role;
-        } else {
-          db.members.push({
-            id: uid(),
-            spaceId: space.id,
-            userId: me().id,
-            role: space.role
-          });
-        }
-
-        save(db);
+    async function(form){
+      var code=String(form.get('code')||'').trim().toUpperCase();
+      if(!/^[A-HJ-NP-Z2-9]{6}$/.test(code))return toast('رمز الدعوة يجب أن يكون 6 خانات صحيحة');
+      var button=$('modal-form').querySelector('[type="submit"]');
+      if(!button||button.disabled)return;button.disabled=true;
+      try{
+        var result=await submissionAction({action:'requestJoinWorkspace',code:code});
         closeModal();
-        renderSpaces();
-        openSpace(space.id);
-
-        toast("تم الانضمام إلى الغرفة بنجاح");
-
-      }).catch(function (err) {
-
-        toast("تعذر الانضمام: " + err.message);
-
-      }).finally(function () {
-
-        btn.disabled = false;
-
-      });
-
+        if(result.status==='member'){
+          toast('أنت عضو في هذه المساحة بالفعل');
+          enterApp();
+        }else{
+          var msg=result.message||'تم إرسال طلب الانضمام، بانتظار موافقة المدير.';
+          openModal('📩 حالة طلب الانضمام','<p>'+esc(msg)+'</p>',function(){closeModal();});
+          $('modal-form').querySelector('[type="submit"]').textContent='حسنًا';
+        }
+      }catch(err){
+        button.disabled=false;
+        toast('تعذر إرسال الطلب: '+String(err.message||err));
+      }
     }
   );
 });
