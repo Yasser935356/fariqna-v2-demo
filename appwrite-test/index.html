@@ -462,6 +462,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <div class="invite-box" id="invite-box">
         <span class="muted">رمز الدعوة</span>
         <strong id="invite-code" dir="ltr"></strong>
+        <span id="invite-countdown" class="muted" style="font-size:0.8rem" aria-live="off"></span>
         <button class="btn small" id="copy-code-btn">نسخ</button>
       </div>
     </div>
@@ -1058,12 +1059,14 @@ function enterApp() {
         existing.desc = space.desc;
         existing.adminId = space.adminId;
         if (space.code) existing.code = space.code;
+        if (space.codeExpiresAt) existing.codeExpiresAt = space.codeExpiresAt;
       } else {
         db.spaces.push({
           id: space.id,
           name: space.name,
           desc: space.desc,
           code: space.code || "",
+          codeExpiresAt: space.codeExpiresAt || null,
           adminId: space.adminId
         });
       }
@@ -1486,7 +1489,10 @@ loadRoomMessages();
   refreshTasks(id, false);
   // عرض ساعة الاعتماد في المهام من سجل الإنجازات المصرّح به.
   refreshApprovedHistory(id);
-  if(myMembership(id)&&myMembership(id).role==='admin')fetchMemberExitsNotice(id);
+  if(myMembership(id)&&myMembership(id).role==='admin'){
+    fetchMemberExitsNotice(id);
+    refreshInviteForManager(id);
+  }
 
 }
 
@@ -1564,11 +1570,52 @@ loadRoomMessages();
 
   $('back-btn').addEventListener('click', function () { state.myTasksView=false; renderSpaces(); show('spaces'); });
 
-  $('copy-code-btn').addEventListener('click', function () {
-    var s = db.spaces.find(function (x) { return x.id === state.spaceId; });
-    if (!s) return;
-    if (navigator.clipboard) navigator.clipboard.writeText(s.code).then(function () { toast('تم نسخ الرمز'); }, function () { toast('الرمز: ' + s.code); });
-    else toast('الرمز: ' + s.code);
+  // ---------- رموز الدعوة تتغير تلقائيًا كل 10 دقائق بواسطة الخادم ----------
+  var inviteLoading=Object.create(null),inviteRetry=Object.create(null);
+  function updateInviteCountdown(){
+    if(state.view!=='space'||!canViewReports())return;
+    var space=db.spaces.find(function(x){return x.id===state.spaceId;});
+    if(!space)return;
+    var expiry=Date.parse(space.codeExpiresAt||'');
+    var valid=!!space.code&&Number.isFinite(expiry)&&expiry>Date.now();
+    $('invite-code').textContent=valid?space.code:'جارٍ التحديث…';
+    var remaining=valid?Math.ceil((expiry-Date.now())/1000):0;
+    $('invite-countdown').textContent=valid?'⏳ يتغير بعد '+Math.floor(remaining/60)+':'+String(remaining%60).padStart(2,'0'):'⏳ تحديث الرمز…';
+    if(!valid&&!inviteLoading[space.id]&&Date.now()>=(inviteRetry[space.id]||0))
+      refreshInviteForManager(space.id);
+  }
+  async function refreshInviteForManager(workspaceId){
+    var user=me(),space=db.spaces.find(function(x){return x.id===workspaceId;});
+    if(!user||!space||!myMembership(workspaceId)||myMembership(workspaceId).role!=='admin')return null;
+    if(inviteLoading[workspaceId])return inviteLoading[workspaceId];
+    var uid=user.id;
+    inviteRetry[workspaceId]=Date.now()+30000;
+    var job=(async function(){
+      try{
+        var result=await submissionAction({action:'getInviteCode',workspaceId:workspaceId});
+        if(!me()||me().id!==uid)return null;
+        if(!/^[A-HJ-NP-Z2-9]{6}$/.test(result.code||'')||!Number.isFinite(Date.parse(result.expiresAt)))
+          throw Error('استجابة رمز الدعوة غير صحيحة');
+        space.code=result.code;space.codeExpiresAt=result.expiresAt;
+        if(state.view==='space'&&state.spaceId===workspaceId)updateInviteCountdown();
+        return result.code;
+      }catch(err){
+        if(state.view==='space'&&state.spaceId===workspaceId)
+          toast('تعذر تحديث رمز الدعوة: '+String(err.message||err));
+        return null;
+      }
+    })();
+    inviteLoading[workspaceId]=job;
+    try{return await job;}finally{delete inviteLoading[workspaceId];}
+  }
+  setInterval(updateInviteCountdown,1000);
+  $('copy-code-btn').addEventListener('click',async function(){
+    if(!canViewReports())return;
+    var code=await refreshInviteForManager(state.spaceId);
+    if(!code)return toast('تعذر الحصول على رمز الدعوة الحالي');
+    try{if(navigator.clipboard){await navigator.clipboard.writeText(code);toast('تم نسخ الرمز الحالي');}
+    else toast('الرمز الحالي: '+code);}
+    catch(_){toast('الرمز الحالي: '+code);}
   });
 
   $('filters').addEventListener('click', function (e) {
@@ -1599,6 +1646,7 @@ loadRoomMessages();
     $('space-role').textContent = isAdmin ? 'مدير' : 'عضو';
     $('space-role').className = 'badge' + (isAdmin ? '' : ' member');
     $('invite-code').textContent = isAdmin ? s.code : '••••••';
+    if(isAdmin)updateInviteCountdown(); else $('invite-countdown').textContent='';
     $('invite-box').classList.toggle('hidden', !isAdmin);
     $('new-task-panel').classList.toggle('hidden', !isAdmin);
     $('admin-report-actions').classList.toggle('hidden', !isAdmin);
