@@ -466,6 +466,10 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       </div>
     </div>
 
+    <section id="member-exits-notice" class="panel hidden" aria-live="polite" style="margin:12px 0 24px;border:2px solid #dcd6ff">
+      <h3>📨 رسائل مغادرة الأعضاء</h3>
+      <div id="member-exits-notice-content"></div>
+    </section>
     <div class="layout">
       <div class="col-main">
         <div class="page-head">
@@ -1478,6 +1482,7 @@ loadRoomMessages();
   refreshTasks(id, false);
   // عرض ساعة الاعتماد في المهام من سجل الإنجازات المصرّح به.
   refreshApprovedHistory(id);
+  if(myMembership(id)&&myMembership(id).role==='admin')fetchMemberExitsNotice(id);
 
 }
 
@@ -1608,7 +1613,71 @@ loadRoomMessages();
     $('select-all-assignees').disabled = availableAssignees.length === 0;
 
     renderTasks(); renderMembers();
+    renderMemberExitsNotice();
   }
+
+
+  // ---------- المرحلة التاسعة: رسائل مغادرة الأعضاء للمدير فقط ----------
+  var exitNotices=Object.create(null);
+  function exitNoticeKey(wid){return (me()?me().id:'guest')+':'+wid;}
+  function showExitNotices(){
+    var panel=$('member-exits-notice'),container=$('member-exits-notice-content');
+    var m=myMembership(state.spaceId);
+    if(!m||m.role!=='admin'){panel.classList.add('hidden');container.replaceChildren();return;}
+    var record=exitNotices[exitNoticeKey(state.spaceId)];
+    var pending=record&&Array.isArray(record.rows)?record.rows.filter(function(item){
+      return item.exitType==='left'&&item.acknowledged!==true;
+    }):[];
+    container.replaceChildren();
+    panel.classList.toggle('hidden',pending.length===0);
+    pending.forEach(function(row){
+      var card=document.createElement('article');card.className='ranking-card';
+      card.style.marginTop='12px';
+      var title=document.createElement('h4');title.textContent='🚪 '+(row.userName||'عضو')+' غادر المساحة';
+      var reason=document.createElement('p');reason.textContent='📝 السبب: '+String(row.reason||'—');
+      reason.style.whiteSpace='pre-wrap';reason.style.overflowWrap='anywhere';
+      var date=document.createElement('p');date.className='muted';date.textContent='📅 '+noteDate(row.exitedAt);
+      var ack=document.createElement('button');ack.className='btn primary small';ack.type='button';
+      ack.dataset.exitId=row.id;ack.textContent='✅ تم الاطلاع';
+      card.append(title,reason,date,ack);container.appendChild(card);
+    });
+  }
+  async function fetchMemberExitsNotice(workspaceId){
+    var user=me();var membership=myMembership(workspaceId);
+    if(!user||!membership||membership.role!=='admin')return;
+    var userId=user.id;
+    try{
+      var result=await submissionAction({action:'listMemberExits',workspaceId:workspaceId});
+      if(!me()||me().id!==userId)return;
+      if(!Array.isArray(result.exits))throw Error('تعذر قراءة سجل المغادرة');
+      exitNotices[exitNoticeKey(workspaceId)]={rows:result.exits};
+    }catch(err){
+      if(me()&&me().id===userId&&state.spaceId===workspaceId)
+        toast('تعذر جلب رسائل المغادرة: '+String(err.message||err));
+      return;
+    }
+    if(state.spaceId===workspaceId&&state.view==='space')showExitNotices();
+  }
+  $('member-exits-notice-content').addEventListener('click',async function(event){
+    var button=event.target.closest('[data-exit-id]');
+    if(!button||button.disabled||state.view!=='space')return;
+    var membership=myMembership(state.spaceId);
+    if(!membership||membership.role!=='admin')return;
+    var workspaceId=state.spaceId,exitId=button.dataset.exitId;
+    button.disabled=true;
+    try{
+      await submissionAction({action:'acknowledgeMemberExit',workspaceId:workspaceId,exitId:exitId});
+      var cache=exitNotices[exitNoticeKey(workspaceId)];
+      var row=cache&&Array.isArray(cache.rows)?cache.rows.find(function(r){return r.id===exitId;}):null;
+      if(row)row.acknowledged=true;
+      if(state.spaceId===workspaceId&&state.view==='space')showExitNotices();
+      toast('✅ تم تسجيل الاطلاع');
+    }catch(err){
+      button.disabled=false;
+      toast('تعذر تأكيد الاطلاع: '+String(err.message||err));
+    }
+  });
+  function renderMemberExitsNotice(){showExitNotices();}
 
   // التبديل بين عرض المساحة العادي وعرض المهام المختصر للعضو المكلّف.
   $('my-tasks-toggle').addEventListener('click', function () {
