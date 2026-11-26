@@ -566,6 +566,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
 
         <div class="panel">
         <h3>👥 الأعضاء</h3>
+          <button type="button" id="bulk-remove-members-button" class="btn danger block hidden" style="margin-bottom:8px">🗑️ إزالة عدة أعضاء</button>
           <ul id="members-list" class="members"></ul>
         </div>
         <section id="former-members-panel" class="panel hidden" style="margin-top:16px">
@@ -2818,6 +2819,7 @@ dueAt: dueAt
     var viewer = me();
     var membership = myMembership(state.spaceId);
     var isAdmin = !!(membership && membership.role === 'admin');
+    $('bulk-remove-members-button').classList.toggle('hidden', !isAdmin || !membersForReports().length);
     db.members.filter(function(m){return m.spaceId===state.spaceId;}).forEach(function(m){
       var u=db.users.find(function(x){return x.id===m.userId;});
       if(!u)return;
@@ -3264,6 +3266,53 @@ dueAt: dueAt
     if(state.memberProfileTab==='notes')fetchNotes(state.spaceId,state.memberProfileId);
   });
 
+
+  // ---------- إزالة جماعية للأعضاء (المدير فقط) ----------
+  $('bulk-remove-members-button').addEventListener('click',function(){
+    if(state.view!=='space'||!canViewReports())return;
+    var workspaceId=state.spaceId,viewer=me();
+    if(!viewer)return;
+    var candidates=membersForReports().filter(function(m){return m.id!==viewer.id;});
+    if(!candidates.length)return toast('لا يوجد أعضاء للإزالة');
+    var options=candidates.map(function(m){
+      return '<label class="check"><input type="checkbox" name="bulkMember" value="'+esc(m.id)+'"> '+esc(m.name)+'</label>';
+    }).join('');
+    openModal('🗑️ إزالة عدة أعضاء',
+      '<p>حدد الأعضاء المراد إزالتهم (حتى 50 في العملية الواحدة). ستُحفظ إنجازاتهم ومكافآتهم المعتمدة، وتُسحب تكليفاتهم غير المعتمدة.</p>'+
+      '<fieldset class="assignees"><legend>الأعضاء</legend><div style="max-height:200px;overflow:auto">'+options+'</div></fieldset>'+
+      '<label>سبب الإزالة المشترك (إلزامي)<textarea name="reason" maxlength="1000" rows="3" required placeholder="اكتب سبب الإزالة"></textarea></label>'+
+      '<label class="check"><input type="checkbox" name="confirmRemoval" required> أؤكد إزالة الأعضاء المحددين</label>',
+      async function(form){
+        if(state.spaceId!==workspaceId||!canViewReports()||!me()||me().id!==viewer.id)return toast('انتهت صلاحية هذه العملية');
+        var ids=Array.from(new Set(form.getAll('bulkMember').map(String)));
+        var reason=String(form.get('reason')||'').trim();
+        if(!ids.length)return toast('حدد عضوًا واحدًا على الأقل');
+        if(ids.length>50)return toast('الحد الأقصى 50 عضوًا في العملية الواحدة');
+        if(!reason)return toast('يجب كتابة سبب الإزالة');
+        if(form.get('confirmRemoval')!=='on')return toast('يجب تأكيد الإزالة');
+        var eligible=membersForReports().map(function(m){return m.id;});
+        if(ids.some(function(id){return id===viewer.id||!eligible.includes(id);}))return toast('تغيرت قائمة الأعضاء، افتح النافذة من جديد');
+        var submit=$('modal-form').querySelector('button[type="submit"]'),cancel=$('modal-cancel');
+        if(!submit||submit.disabled)return;
+        submit.disabled=true;if(cancel)cancel.disabled=true;
+        try{
+          var result=await submissionAction({action:'removeMembers',workspaceId:workspaceId,memberIds:ids,reason:reason,confirmed:true});
+          if(!Array.isArray(result.removed)||!Array.isArray(result.failed))throw new Error('تعذر التحقق من نتيجة الإزالة');
+          if(!me()||me().id!==viewer.id||state.spaceId!==workspaceId)return;
+          var removedIds=result.removed.map(function(item){return item.memberId;});
+          db.members=db.members.filter(function(m){return !(m.spaceId===workspaceId&&removedIds.includes(m.userId));});
+          save(db);
+          closeModal();
+          openSpace(workspaceId);
+          toast(result.failed.length?'تمت إزالة '+removedIds.length+' من '+ids.length+'؛ تعذر إكمال '+result.failed.length+'. راجع القائمة قبل إعادة المحاولة.':'✅ تمت إزالة '+removedIds.length+' من الأعضاء وحُفظ سجلهم');
+        }catch(err){
+          if(me()&&me().id===viewer.id&&state.spaceId===workspaceId){
+            closeModal();openSpace(workspaceId);
+            toast('تعذرت العملية أو تعذر تأكيد نتيجتها: '+String(err.message||err)+'؛ راجع قائمة الأعضاء قبل المحاولة مجددًا');
+          }
+        }finally{submit.disabled=false;if(cancel)cancel.disabled=false;}
+      });
+  });
 
   // ---------- المرحلة التاسعة: إزالة عضو مع سبب إلزامي ----------
   $('remove-member-button').addEventListener('click',function(){
