@@ -3326,7 +3326,7 @@ dueAt: dueAt
     return 'محادثة المهمة: '+(task?task.title:'مهمة سابقة');
   }
   function muteExpiryLabel(rule){
-    return rule.expiresAt===null?'دائم حتى يفك المدير الكتم':new Date(rule.expiresAt).toLocaleString('ar-SA-u-ca-gregory',{timeZone:'Asia/Riyadh'});
+    return rule.expiresAt===null?'دائم حتى يفك المدير الكتم':new Date(rule.expiresAt).toLocaleString('ar-SA-u-ca-gregory',{timeZone:'Asia/Riyadh',year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit'});
   }
   function showChatMuteNotice(kind,rules){
     var el=$(kind+'-mute-notice');
