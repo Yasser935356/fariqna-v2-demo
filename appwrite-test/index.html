@@ -503,7 +503,8 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
     <p class="muted">لا توجد رسائل حتى الآن.</p>
   </div>
 
-  <form id="room-chat-form" class="form">
+  <div id="room-mute-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
+    <form id="room-chat-form" class="form">
     <label>اكتب رسالتك
       <textarea name="message" rows="2" maxlength="2000"
                 placeholder="اكتب رسالة لأعضاء الغرفة..." ></textarea>
@@ -653,6 +654,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" class="chip" data-member-tab="notes" aria-pressed="false">📝 ملاحظات المدير</button>
     </nav>
     <div style="margin:12px 0 18px;display:flex;justify-content:flex-end">
+      <button id="manage-mute-button" type="button" class="btn ghost small" style="margin-inline-end:8px">🔇 إدارة الكتم</button>
       <button id="remove-member-button" type="button" class="btn danger small">🗑️ إزالة العضو من المساحة</button>
     </div>
     <div id="manager-member-content" class="report-items" aria-live="polite"></div>
@@ -679,6 +681,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <p class="muted">لا توجد رسائل حتى الآن.</p>
     </div>
 
+    <div id="task-mute-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
     <form id="task-chat-form" class="form">
       <label>اكتب رسالتك
         <textarea name="message" rows="2" maxlength="2000"
@@ -1502,6 +1505,7 @@ function openSpace(id) {
 
   renderSpace();
   show('space');
+  showChatMuteNotice('room',[]);
 loadRoomMessages();
   var functions = new Appwrite.Functions(window.fariqna.client);
 
@@ -3314,6 +3318,89 @@ dueAt: dueAt
       });
   });
 
+  // ---------- إدارة كتم المحادثات ----------
+  function muteScopeLabel(rule){
+    if(rule.scope==='all')return 'جميع المحادثات';
+    if(rule.scope==='general')return 'المحادثة العامة';
+    var task=db.tasks.find(function(t){return t.id===rule.taskId&&t.spaceId===state.spaceId;});
+    return 'محادثة المهمة: '+(task?task.title:'مهمة سابقة');
+  }
+  function muteExpiryLabel(rule){
+    return rule.expiresAt===null?'دائم حتى يفك المدير الكتم':new Date(rule.expiresAt).toLocaleString('ar-SA-u-ca-gregory',{timeZone:'Asia/Riyadh'});
+  }
+  function showChatMuteNotice(kind,rules){
+    var el=$(kind+'-mute-notice');
+    rules=Array.isArray(rules)?rules:[];
+    el.textContent=rules.map(function(rule){return '🔇 '+muteScopeLabel(rule)+' — السبب: '+rule.reason+' — '+muteExpiryLabel(rule);}).join('\n');
+    el.classList.toggle('hidden',!rules.length);
+  }
+  async function openMuteManager(){
+    if(state.view!=='member-profile'||!canViewReports())return;
+    var wid=state.spaceId,mid=state.memberProfileId,viewer=me();
+    if(!viewer||mid===viewer.id)return;
+    function current(){return me()&&me().id===viewer.id&&state.spaceId===wid&&state.memberProfileId===mid&&state.view==='member-profile'&&canViewReports();}
+    var button=$('manage-mute-button');
+    if(button.disabled)return;
+    button.disabled=true;
+    try{
+      var result=await submissionAction({action:'listMemberMutes',workspaceId:wid,memberId:mid});
+      if(!current())return;
+      var rules=Array.isArray(result.mutes)?result.mutes:[];
+      var tasks=db.tasks.filter(function(t){return t.spaceId===wid&&(t.assignees||[]).includes(mid);});
+      var taskOptions=tasks.map(function(t){return '<option value="'+esc(t.id)+'">'+esc(t.title)+'</option>';}).join('');
+      var list=rules.map(function(rule,i){
+        return '<div class="report-card" style="padding:10px;margin-bottom:8px"><strong>'+esc(muteScopeLabel(rule))+'</strong><p class="muted">السبب: '+esc(rule.reason)+'<br>الانتهاء: '+esc(muteExpiryLabel(rule))+'</p><button type="button" class="btn ghost small" data-clear-mute="'+i+'">🔊 فك هذا الكتم</button></div>';
+      }).join('')||'<p class="muted">لا يوجد كتم نشط.</p>';
+      openModal('🔇 إدارة الكتم',
+        '<div style="max-height:200px;overflow:auto">'+list+'</div>'+
+        '<label>نوع الكتم<select name="scope"><option value="general">المحادثة العامة فقط</option><option value="task">محادثة مهمة محددة</option><option value="all">جميع المحادثات</option></select></label>'+
+        '<label id="mute-task-row" class="hidden">المهمة<select name="taskId"><option value="">اختر مهمة</option>'+taskOptions+'</select></label>'+
+        '<label>المدة<select name="duration"><option value="5">5 دقائق</option><option value="60">ساعة</option><option value="1440">يوم</option><option value="10080">أسبوع</option><option value="permanent">دائم</option><option value="custom">مدة مخصصة</option></select></label>'+
+        '<div id="mute-custom-row" class="hidden"><label>الأيام<input name="days" type="number" min="0" step="1" value="0"></label><label>الساعات<input name="hours" type="number" min="0" step="1" value="0"></label><label>الدقائق<input name="minutes" type="number" min="0" step="1" value="0"></label></div>'+
+        '<label>سبب الكتم (إلزامي)<textarea name="reason" maxlength="500" rows="2" required></textarea></label>',
+        async function(form){
+          if(!current())return toast('انتهت صلاحية العملية');
+          var scope=form.get('scope'),taskId=scope==='task'?String(form.get('taskId')||''):'';
+          var reason=String(form.get('reason')||'').trim(),duration=form.get('duration'),minutes=null;
+          if(!reason)return toast('اكتب سبب الكتم');
+          if(scope==='task'&&!taskId)return toast('اختر المهمة');
+          if(duration==='custom'){
+            var parts=['days','hours','minutes'].map(function(k){return Number(form.get(k)||0);});
+            if(parts.some(function(n){return !Number.isSafeInteger(n)||n<0;}))return toast('أدخل مدة صحيحة');
+            minutes=parts[0]*1440+parts[1]*60+parts[2];
+          }else if(duration!=='permanent')minutes=Number(duration);
+          if(minutes!==null&&(!Number.isSafeInteger(minutes)||minutes<1))return toast('حدد مدة لا تقل عن دقيقة');
+          await changeMute({action:'setMemberMute',scope:scope,taskId:taskId,reason:reason,durationMinutes:minutes});
+        });
+      var f=$('modal-form');
+      f.querySelector('[type="submit"]').textContent='تأكيد الكتم';
+      f.elements.scope.onchange=function(){$('mute-task-row').classList.toggle('hidden',this.value!=='task');};
+      f.elements.duration.onchange=function(){$('mute-custom-row').classList.toggle('hidden',this.value!=='custom');};
+      var busy=false;
+      async function changeMute(payload){
+        if(!current()||busy)return;
+        busy=true;
+        var controls=Array.from(f.querySelectorAll('button'));controls.forEach(function(b){b.disabled=true;});
+        try{
+          await submissionAction(Object.assign({workspaceId:wid,memberId:mid},payload));
+          if(current()){
+            closeModal();toast(payload.action==='setMemberMute'?'✅ تم كتم العضو':'✅ تم فك الكتم');
+            await openMuteManager();
+          }
+        }catch(err){if(current())toast('تعذر تنفيذ العملية: '+String(err.message||err));}
+        finally{busy=false;controls.forEach(function(b){b.disabled=false;});}
+      }
+      f.querySelectorAll('[data-clear-mute]').forEach(function(btn){
+        btn.onclick=function(){
+          var rule=rules[Number(btn.dataset.clearMute)];
+          if(rule)changeMute({action:'clearMemberMute',scope:rule.scope,taskId:rule.taskId||''});
+        };
+      });
+    }catch(err){if(current())toast('تعذر تحميل الكتم: '+String(err.message||err));}
+    finally{button.disabled=false;}
+  }
+  $('manage-mute-button').addEventListener('click',openMuteManager);
+
   // ---------- المرحلة التاسعة: إزالة عضو مع سبب إلزامي ----------
   $('remove-member-button').addEventListener('click',function(){
     if(!canViewReports()||state.view!=='member-profile')return;
@@ -3791,6 +3878,10 @@ async function uploadChatAttachment(file, workspaceId, taskId, caption) {
   if (check.status === "failed" || check.responseStatusCode >= 400 || !access.success) {
     throw new Error(access.message || "ليس لديك صلاحية لرفع مرفق هنا");
   }
+  if(Array.isArray(access.mutes)&&access.mutes.length){
+    showChatMuteNotice(taskId?'task':'room',access.mutes);
+    throw new Error('أنت مكتوم في هذه المحادثة — السبب: '+access.mutes[0].reason);
+  }
   var storage = new Appwrite.Storage(window.fariqna.client);
   var uploaded = await storage.createFile({
     bucketId: "fariqna-v2-files",
@@ -3937,8 +4028,8 @@ function appendChatBubble(box, msg, workspaceId, taskId) {
 var roomLoadKey=null;
 async function loadRoomMessages(silent) {
   var workspaceId=state.spaceId;
-  var box=$('room-messages');
-  if(!workspaceId||!box)return;
+  var box=$('room-messages'),viewerId=me()&&me().id;
+  if(!workspaceId||!box||!viewerId)return;
   if(roomLoadKey===workspaceId)return;
   roomLoadKey=workspaceId;
   if(!silent)box.textContent='جارٍ تحميل الرسائل...';
@@ -3953,7 +4044,8 @@ async function loadRoomMessages(silent) {
     if(!result.success||!Array.isArray(result.messages)){
       throw new Error(result.message||'تعذر تحميل الرسائل');
     }
-    if(state.spaceId!==workspaceId||state.view!=='space')return;
+    if(state.spaceId!==workspaceId||state.view!=='space'||!me()||me().id!==viewerId)return;
+    showChatMuteNotice('room',result.mutes);
     var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
@@ -4000,6 +4092,7 @@ $('tasks-list').addEventListener('click', function (e) {
     'جارٍ تجهيز المحادثة...';
 
   $('task-chat-form').reset();
+  showChatMuteNotice('task',[]);
   $('task-chat-modal').classList.remove('hidden');
  loadTaskMessages();
 });
@@ -4014,8 +4107,8 @@ var taskLoadKey=null;
 async function loadTaskMessages(silent) {
   var taskId=state.taskChatId;
   var workspaceId=state.spaceId;
-  var box=$('task-chat-messages');
-  if(!taskId||!workspaceId||!box)return;
+  var box=$('task-chat-messages'),viewerId=me()&&me().id;
+  if(!taskId||!workspaceId||!box||!viewerId)return;
   var key=workspaceId+':'+taskId;
   if(taskLoadKey===key)return;
   taskLoadKey=key;
@@ -4031,7 +4124,8 @@ async function loadTaskMessages(silent) {
     if(!result.success||!Array.isArray(result.messages)){
       throw new Error(result.message||'تعذر تحميل رسائل المهمة');
     }
-    if(state.taskChatId!==taskId||state.spaceId!==workspaceId||$('task-chat-modal').classList.contains('hidden'))return;
+    if(state.taskChatId!==taskId||state.spaceId!==workspaceId||$('task-chat-modal').classList.contains('hidden')||!me()||me().id!==viewerId)return;
+    showChatMuteNotice('task',result.mutes);
     var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
