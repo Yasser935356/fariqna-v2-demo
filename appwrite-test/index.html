@@ -499,6 +499,17 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
        <section id="room-chat-panel" class="panel" style="margin-top: 20px;">
   <h3>💬 المحادثة العامة للغرفة</h3>
 
+  <div id="all-lock-controls" class="hidden" style="margin:8px 0;padding:10px;border:1px solid #ddd6fe;border-radius:12px">
+    <button type="button" id="all-lock-button" class="btn danger small">🔒 قفل جميع المحادثات</button>
+    <form id="all-lock-form" class="form hidden" style="margin-top:8px">
+      <p class="muted">يشمل المحادثة العامة ومحادثات المهام الحالية والجديدة. لا يغير القفل الفردي.</p>
+      <label>مدة القفل<select name="duration"><option value="5">5 دقائق</option><option value="60">ساعة</option><option value="1440">يوم</option><option value="10080">أسبوع</option><option value="permanent">دائم</option><option value="custom">مدة مخصصة</option></select></label>
+      <div id="all-lock-custom" class="hidden"><label>الأيام<input type="number" name="days" min="0" step="1" value="0"></label><label>الساعات<input type="number" name="hours" min="0" step="1" value="0"></label><label>الدقائق<input type="number" name="minutes" min="0" step="1" value="0"></label></div>
+      <label>سبب القفل (إلزامي)<textarea name="reason" required maxlength="500" rows="2"></textarea></label>
+      <div style="display:flex;gap:8px"><button type="submit" class="btn primary small">تأكيد قفل الجميع</button><button type="button" id="all-lock-cancel" class="btn ghost small">إلغاء</button></div>
+    </form>
+  </div>
+  <div id="room-all-lock-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
   <div id="room-lock-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
     <div id="room-lock-controls" class="hidden" style="margin:8px 0">
       <button type="button" id="room-lock-button" class="btn ghost small">🔒 قفل المحادثة العامة</button>
@@ -688,6 +699,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" id="task-chat-close" class="btn ghost small">إغلاق ✕</button>
     </div>
 
+    <div id="task-all-lock-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
     <div id="task-lock-notice" class="hidden" role="status" style="padding:10px;margin:8px 0;background:#fff1df;border-radius:12px;color:#703d13;white-space:pre-wrap"></div>
     <div id="task-lock-controls" class="hidden" style="margin:8px 0">
       <button type="button" id="task-lock-button" class="btn ghost small">🔒 قفل المحادثة</button>
@@ -1530,6 +1542,7 @@ function openSpace(id) {
   showChatMuteNotice('room',[]);
   resetChatPins('room');
   resetRoomLockUI();
+  resetAllChatLock();
   delete $('room-messages').dataset.signature;
 loadRoomMessages();
   var functions = new Appwrite.Functions(window.fariqna.client);
@@ -3905,8 +3918,9 @@ async function uploadChatAttachment(file, workspaceId, taskId, caption) {
   }
   if(access.chatLock&&access.canManageChatLock!==true){
     if(state.spaceId===workspaceId&&state.view==='space'){
-      if(taskId&&state.taskChatId===taskId)renderTaskLock(access.chatLock,false,workspaceId,taskId);
-      else if(!taskId)renderRoomLock(access.chatLock,false,workspaceId);
+      renderAllChatLock(access.allChatsLock,false,workspaceId);
+      if(taskId&&state.taskChatId===taskId)renderTaskLock(access.individualChatLock,false,workspaceId,taskId);
+      else if(!taskId)renderRoomLock(access.individualChatLock,false,workspaceId);
     }
     throw new Error('المحادثة مقفلة — السبب: '+access.chatLock.reason);
   }
@@ -3941,6 +3955,7 @@ async function uploadChatAttachment(file, workspaceId, taskId, caption) {
 }
 $('room-chat-form').addEventListener('submit', async function (e) {
   e.preventDefault();
+  if(preventAllChatSend())return;
   var lockCtx=roomLockState;
   if(currentRoomLockContext(lockCtx)&&!lockCtx.canManage&&lockCtx.lock&&
      (lockCtx.lock.expiresAt===null||Date.parse(lockCtx.lock.expiresAt)>Date.now())){
@@ -4236,6 +4251,85 @@ $('room-lock-form').addEventListener('submit',function(e){
   changeRoomChatLock(ctx,'setGeneralChatLock',{reason:reason,durationMinutes:minutes});
 });
 
+// ---------- قفل جميع المحادثات ----------
+var allChatLockState=null;
+var allChatLockBusy=new Set();
+function resetAllChatLock(){
+  allChatLockState=null;
+  $('all-lock-controls').classList.add('hidden');
+  $('all-lock-form').classList.add('hidden');
+  $('all-lock-form').reset();
+  $('all-lock-custom').classList.add('hidden');
+  ['room-all-lock-notice','task-all-lock-notice'].forEach(function(id){
+    $(id).textContent='';$(id).classList.add('hidden');
+  });
+}
+function currentAllChatLock(ctx){
+  return ctx&&me()&&me().id===ctx.viewerId&&state.view==='space'&&state.spaceId===ctx.workspaceId;
+}
+function renderAllChatLock(lock,canManage,workspaceId){
+  if(!me()||state.view!=='space'||state.spaceId!==workspaceId)return;
+  allChatLockState={lock:lock||null,canManage:canManage===true,workspaceId:workspaceId,viewerId:me().id};
+  var busy=allChatLockBusy.has(workspaceId),f=$('all-lock-form'),button=$('all-lock-button');
+  $('all-lock-controls').classList.toggle('hidden',!allChatLockState.canManage);
+  if(!allChatLockState.canManage||lock)f.classList.add('hidden');
+  button.textContent=lock?'🔓 رفع قفل جميع المحادثات':'🔒 قفل جميع المحادثات';
+  button.disabled=busy;f.querySelector('[type="submit"]').disabled=busy;
+  var message=lock?'🔒 جميع المحادثات مقفلة بواسطة المدير'+
+    '\nالسبب: '+lock.reason+'\nتاريخ القفل: '+lockTimeLabel(lock.lockedAt)+
+    '\nموعد إعادة الفتح: '+(lock.expiresAt===null?'دائم حتى يفتحه المدير يدويًا':lockTimeLabel(lock.expiresAt))+
+    (allChatLockState.canManage?'\nيمكنك الإرسال بصفتك المدير.':'\nيمكنك قراءة الرسائل وتسليم المهام، ولكن لا يمكنك الإرسال في المحادثات.'):'';
+  ['room-all-lock-notice','task-all-lock-notice'].forEach(function(id){
+    $(id).textContent=message;$(id).classList.toggle('hidden',!lock);
+  });
+}
+function preventAllChatSend(){
+  var ctx=allChatLockState;
+  if(currentAllChatLock(ctx)&&!ctx.canManage&&ctx.lock&&
+    (ctx.lock.expiresAt===null||Date.parse(ctx.lock.expiresAt)>Date.now())){
+    toast('جميع المحادثات مقفلة — السبب: '+ctx.lock.reason);return true;
+  }
+  return false;
+}
+async function changeAllChatLock(ctx,action,extra){
+  if(!currentAllChatLock(ctx)||!ctx.canManage||!canViewReports()||allChatLockBusy.has(ctx.workspaceId))return;
+  var key=ctx.workspaceId,f=$('all-lock-form');
+  allChatLockBusy.add(key);$('all-lock-button').disabled=true;f.querySelector('[type="submit"]').disabled=true;
+  try{
+    var result=await submissionAction(Object.assign({action:action,workspaceId:key},extra||{}));
+    if(currentAllChatLock(ctx)){
+      f.classList.add('hidden');f.reset();$('all-lock-custom').classList.add('hidden');
+      renderAllChatLock(result.allChatsLock,true,key);
+      toast(action==='setAllChatsLock'?'✅ تم قفل جميع المحادثات':'✅ تم رفع القفل الجماعي');
+      await loadRoomMessages(true);
+      if(state.taskChatId&&!$('task-chat-modal').classList.contains('hidden'))await loadTaskMessages(true);
+    }
+  }catch(err){if(currentAllChatLock(ctx))toast('تعذر تنفيذ العملية: '+String(err.message||err));}
+  finally{
+    allChatLockBusy.delete(key);
+    if(currentAllChatLock(ctx)){$('all-lock-button').disabled=false;f.querySelector('[type="submit"]').disabled=false;}
+  }
+}
+$('all-lock-button').addEventListener('click',function(){
+  var ctx=allChatLockState;if(!currentAllChatLock(ctx)||!ctx.canManage)return;
+  if(ctx.lock){if(window.confirm('رفع القفل الجماعي؟ ستبقى المحادثات المقفلة بشكل مستقل مقفلة.'))changeAllChatLock(ctx,'clearAllChatsLock');}
+  else $('all-lock-form').classList.toggle('hidden');
+});
+$('all-lock-form').elements.duration.addEventListener('change',function(){$('all-lock-custom').classList.toggle('hidden',this.value!=='custom');});
+$('all-lock-cancel').addEventListener('click',function(){$('all-lock-form').classList.add('hidden');});
+$('all-lock-form').addEventListener('submit',function(e){
+  e.preventDefault();
+  var ctx=allChatLockState,form=new FormData(this),duration=form.get('duration'),reason=String(form.get('reason')||'').trim(),minutes=null;
+  if(!reason)return toast('اكتب سبب القفل');
+  if(duration==='custom'){
+    var parts=['days','hours','minutes'].map(function(k){return Number(form.get(k)||0);});
+    if(parts.some(function(n){return !Number.isSafeInteger(n)||n<0;}))return toast('أدخل مدة صحيحة');
+    minutes=parts[0]*1440+parts[1]*60+parts[2];
+  }else if(duration!=='permanent')minutes=Number(duration);
+  if(minutes!==null&&(!Number.isSafeInteger(minutes)||minutes<1))return toast('حدد مدة لا تقل عن دقيقة');
+  changeAllChatLock(ctx,'setAllChatsLock',{reason:reason,durationMinutes:minutes});
+});
+
 // ---------- تثبيت الرسائل ----------
 var pendingChatPins=new Set();
 function resetChatPins(kind){
@@ -4364,7 +4458,8 @@ async function loadRoomMessages(silent) {
     }
     if(state.spaceId!==workspaceId||state.view!=='space'||!me()||me().id!==viewerId)return;
     showChatMuteNotice('room',result.mutes);
-    renderRoomLock(result.chatLock,result.canManageChatLock,workspaceId);
+    renderAllChatLock(result.allChatsLock,result.canManageChatLock,workspaceId);
+    renderRoomLock(result.individualChatLock,result.canManageChatLock,workspaceId);
     renderChatPins('room',result.pinnedMessages,workspaceId,'');
     var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete,m.pinnedBy,m.pinnedAt,m.pinnedByName,m.canPin];}));
     if(silent&&box.dataset.signature===signature)return;
@@ -4448,7 +4543,8 @@ async function loadTaskMessages(silent) {
     }
     if(state.taskChatId!==taskId||state.spaceId!==workspaceId||$('task-chat-modal').classList.contains('hidden')||!me()||me().id!==viewerId)return;
     showChatMuteNotice('task',result.mutes);
-    renderTaskLock(result.chatLock,result.canManageChatLock,workspaceId,taskId);
+    renderAllChatLock(result.allChatsLock,result.canManageChatLock,workspaceId);
+    renderTaskLock(result.individualChatLock,result.canManageChatLock,workspaceId,taskId);
     renderChatPins('task',result.pinnedMessages,workspaceId,taskId);
     var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete,m.pinnedBy,m.pinnedAt,m.pinnedByName,m.canPin];}));
     if(silent&&box.dataset.signature===signature)return;
@@ -4479,6 +4575,7 @@ $('task-chat-form').addEventListener('submit', async function (e) {
     toast('افتح محادثة المهمة أولًا');
     return;
   }
+  if(preventAllChatSend())return;
   var lockCtx=taskLockState;
   if(currentTaskLockContext(lockCtx)&&!lockCtx.canManage&&lockCtx.lock&&
      (lockCtx.lock.expiresAt===null||Date.parse(lockCtx.lock.expiresAt)>Date.now())){
