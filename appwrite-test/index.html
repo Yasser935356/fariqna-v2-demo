@@ -499,7 +499,8 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
        <section id="room-chat-panel" class="panel" style="margin-top: 20px;">
   <h3>💬 المحادثة العامة للغرفة</h3>
 
-  <div id="room-messages" class="chat-messages">
+  <section id="room-pinned-messages" class="hidden" aria-label="الرسائل المثبتة" style="padding:10px;margin:8px 0;background:#f0ecff;border:1px solid #ddd6fe;border-radius:12px;max-height:230px;overflow:auto"></section>
+    <div id="room-messages" class="chat-messages">
     <p class="muted">لا توجد رسائل حتى الآن.</p>
   </div>
 
@@ -677,6 +678,7 @@ select:focus { border-color:var(--primary);box-shadow:0 0 0 3px rgba(91,79,232,.
       <button type="button" id="task-chat-close" class="btn ghost small">إغلاق ✕</button>
     </div>
 
+    <section id="task-pinned-messages" class="hidden" aria-label="الرسائل المثبتة" style="padding:10px;margin:8px 0;background:#f0ecff;border:1px solid #ddd6fe;border-radius:12px;max-height:230px;overflow:auto"></section>
     <div id="task-chat-messages" class="chat-messages">
       <p class="muted">لا توجد رسائل حتى الآن.</p>
     </div>
@@ -1506,6 +1508,8 @@ function openSpace(id) {
   renderSpace();
   show('space');
   showChatMuteNotice('room',[]);
+  resetChatPins('room');
+  delete $('room-messages').dataset.signature;
 loadRoomMessages();
   var functions = new Appwrite.Functions(window.fariqna.client);
 
@@ -3966,6 +3970,7 @@ await uploadChatAttachment(attachment, state.spaceId, null, message);
 function appendChatBubble(box, msg, workspaceId, taskId) {
   var bubble = document.createElement('div');
   bubble.className = 'chat-bubble';
+  bubble.dataset.chatMessageId = msg.id;
 
   var currentUser = me();
   if (currentUser && msg.senderId === currentUser.id) {
@@ -3980,6 +3985,12 @@ function appendChatBubble(box, msg, workspaceId, taskId) {
   name.className = 'chat-name';
   name.textContent = sender ? sender.name : 'عضو';
   bubble.appendChild(name);
+  if(msg.pinnedAt && msg.messageType !== 'deleted'){
+    var pinnedLabel=document.createElement('small');
+    pinnedLabel.style.display='block';
+    pinnedLabel.textContent='📌 مثبتة';
+    bubble.appendChild(pinnedLabel);
+  }
 
   if (msg.messageType === 'deleted') {
     var removed = document.createElement('div');
@@ -4040,7 +4051,79 @@ function appendChatBubble(box, msg, workspaceId, taskId) {
     });
     bubble.appendChild(deleteButton);
   }
+  if(msg.canPin===true && msg.messageType!=='deleted'){
+    var pinButton=document.createElement('button');
+    pinButton.type='button';
+    pinButton.className='btn ghost small';
+    pinButton.style.marginTop='6px';
+    pinButton.textContent=msg.pinnedAt?'📌 فك التثبيت':'📌 تثبيت';
+    pinButton.addEventListener('click',function(){changeChatPin(msg,workspaceId,taskId||'',pinButton);});
+    bubble.appendChild(pinButton);
+  }
   box.appendChild(bubble);
+}
+
+// ---------- تثبيت الرسائل ----------
+var pendingChatPins=new Set();
+function resetChatPins(kind){
+  var panel=$(kind+'-pinned-messages');
+  panel.replaceChildren();
+  panel.classList.add('hidden');
+  delete panel.dataset.signature;
+}
+function renderChatPins(kind,pins,workspaceId,taskId){
+  var panel=$(kind+'-pinned-messages'),box=$(kind==='task'?'task-chat-messages':'room-messages');
+  pins=(Array.isArray(pins)?pins:[]).filter(function(m){return m.pinnedAt&&m.messageType!=='deleted';});
+  var sig=JSON.stringify([workspaceId,taskId,me()&&me().id,pins.map(function(m){return [m.id,m.content,m.caption,m.messageType,m.pinnedAt,m.pinnedByName,m.canPin];})]);
+  if(panel.dataset.signature===sig)return;
+  panel.dataset.signature=sig;
+  panel.replaceChildren();
+  panel.classList.toggle('hidden',!pins.length);
+  if(!pins.length)return;
+  var heading=document.createElement('strong');heading.textContent='📌 الرسائل المثبتة ('+pins.length+'/5)';panel.appendChild(heading);
+  pins.forEach(function(msg){
+    var row=document.createElement('div');
+    row.style.cssText='padding:8px 0;border-bottom:1px solid #ddd6fe;overflow-wrap:anywhere';
+    var jump=document.createElement('button');
+    jump.type='button';jump.className='btn ghost small';
+    jump.style.cssText='white-space:normal;text-align:start;max-width:100%;overflow-wrap:anywhere';
+    var preview=(msg.attachmentId?'📎 ':'')+(msg.content||msg.caption||'رسالة');
+    jump.textContent=preview.length>160?preview.slice(0,160)+'…':preview;
+    jump.title='الانتقال إلى الرسالة الأصلية';
+    jump.onclick=function(){
+      if(state.spaceId!==workspaceId||!me()||(taskId&&state.taskChatId!==taskId))return;
+      var target=Array.from(box.querySelectorAll('[data-chat-message-id]')).find(function(node){return node.dataset.chatMessageId===msg.id;});
+      if(!target)return toast('تعذر العثور على الرسالة، حدّث المحادثة');
+      target.scrollIntoView({behavior:'smooth',block:'nearest'});
+      target.style.outline='2px solid #5B4FE8';
+      setTimeout(function(){target.style.outline='';},1800);
+    };
+    row.appendChild(jump);
+    var detail=document.createElement('small');detail.className='muted';detail.style.display='block';
+    detail.textContent='ثبّتها: '+(msg.pinnedByName||'المدير')+' • '+new Date(msg.pinnedAt).toLocaleString('ar-SA-u-ca-gregory',{timeZone:'Asia/Riyadh'});
+    row.appendChild(detail);
+    if(msg.canPin===true){
+      var unpin=document.createElement('button');unpin.type='button';unpin.className='btn ghost small';unpin.textContent='فك التثبيت';
+      unpin.onclick=function(){changeChatPin(msg,workspaceId,taskId,unpin);};row.appendChild(unpin);
+    }
+    panel.appendChild(row);
+  });
+}
+async function changeChatPin(msg,workspaceId,taskId,button){
+  var viewer=me(),key=workspaceId+':'+taskId+':'+msg.id;
+  function current(){return viewer&&me()&&me().id===viewer.id&&state.view==='space'&&state.spaceId===workspaceId&&(!taskId||(state.taskChatId===taskId&&!$('task-chat-modal').classList.contains('hidden')));}
+  if(!current()||!canViewReports()||msg.canPin!==true||msg.messageType==='deleted'||pendingChatPins.has(key))return;
+  pendingChatPins.add(key);button.disabled=true;
+  try{
+    await submissionAction({action:msg.pinnedAt?'unpinMessage':'pinMessage',workspaceId:workspaceId,taskId:taskId,messageId:msg.id});
+    if(current()){
+      var box=$(taskId?'task-chat-messages':'room-messages');
+      delete box.dataset.signature;
+      toast(msg.pinnedAt?'✅ تم فك تثبيت الرسالة':'📌 تم تثبيت الرسالة');
+      if(taskId)await loadTaskMessages(true);else await loadRoomMessages(true);
+    }
+  }catch(err){if(current())toast('تعذر تنفيذ التثبيت: '+String(err.message||err));}
+  finally{pendingChatPins.delete(key);button.disabled=false;}
 }
 
 // ---------- حذف الرسائل والمرفقات بعد التأكيد ----------
@@ -4072,7 +4155,7 @@ async function deleteChatMessage(msg, workspaceId, taskId, button) {
     if (bubble && box.contains(bubble)) {
       var tmp = document.createElement('div');
       appendChatBubble(tmp,Object.assign({},msg,{messageType:'deleted',content:'تم حذف الرسالة',
-        caption:'',attachmentId:null,canDelete:false}),workspaceId,taskId);
+        caption:'',attachmentId:null,canDelete:false,canPin:false,pinnedBy:null,pinnedAt:null}),workspaceId,taskId);
       bubble.replaceWith(tmp.firstChild);
     }
     toast('✅ تم حذف الرسالة');
@@ -4108,7 +4191,8 @@ async function loadRoomMessages(silent) {
     }
     if(state.spaceId!==workspaceId||state.view!=='space'||!me()||me().id!==viewerId)return;
     showChatMuteNotice('room',result.mutes);
-    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete];}));
+    renderChatPins('room',result.pinnedMessages,workspaceId,'');
+    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete,m.pinnedBy,m.pinnedAt,m.pinnedByName,m.canPin];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
     var previousScroll=box.scrollTop;
@@ -4155,6 +4239,7 @@ $('tasks-list').addEventListener('click', function (e) {
 
   $('task-chat-form').reset();
   showChatMuteNotice('task',[]);
+  resetChatPins('task');
   $('task-chat-modal').classList.remove('hidden');
  loadTaskMessages();
 });
@@ -4188,7 +4273,8 @@ async function loadTaskMessages(silent) {
     }
     if(state.taskChatId!==taskId||state.spaceId!==workspaceId||$('task-chat-modal').classList.contains('hidden')||!me()||me().id!==viewerId)return;
     showChatMuteNotice('task',result.mutes);
-    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete];}));
+    renderChatPins('task',result.pinnedMessages,workspaceId,taskId);
+    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete,m.pinnedBy,m.pinnedAt,m.pinnedByName,m.canPin];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
     var previousScroll=box.scrollTop;
