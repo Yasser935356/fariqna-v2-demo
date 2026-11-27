@@ -2209,8 +2209,20 @@ loadRoomMessages();
     });
     return record ? record.approvedAt : null;
   }
+  function submissionReturnHistoryHtml(sub){
+    var history=sub&&Array.isArray(sub.returnHistory)?sub.returnHistory:[];
+    if(!history.length)return '';
+    var entries=history.slice().reverse().map(function(item,index){
+      return '<div style="margin:8px 0;padding:8px 10px;border:1px solid #f4d5ad;border-radius:9px;background:#fff8ed;color:#703d13">'+
+        '<strong>'+ (index===0?'آخر سبب للإرجاع':'سبب إرجاع سابق')+'</strong>'+
+        '<div style="white-space:pre-wrap;overflow-wrap:anywhere">'+esc(item.reason||'')+'</div>'+
+        '<small>📅 '+esc(formatSubmissionDate(item.returnedAt))+'</small></div>';
+    });
+    return '<div style="margin-top:8px"><strong>↩️ سجل إرجاع التسليم ('+history.length+')</strong>'+entries[0]+
+      (entries.length>1?'<details><summary>عرض أسباب الإرجاع السابقة ('+(entries.length-1)+')</summary>'+entries.slice(1).join('')+'</details>':'')+'</div>';
+  }
   function submissionTimelineHtml(task,sub,userId){
-    if(!sub || !sub.submittedAt)return '';
+    if(!sub || !sub.submittedAt)return submissionReturnHistoryHtml(sub);
     var late=submissionWasLate(task,sub);
     var note=(late?'🔴 تم تسليم المهمة متأخرًا':'📤 تم تسليم المهمة')+
       ' الساعة '+esc(formatSubmissionTime(sub.submittedAt))+
@@ -2224,7 +2236,7 @@ loadRoomMessages();
           ' ('+esc(formatSubmissionDay(approvedAt))+')'
         : 'تم اعتماد المهمة')+'</div>';
     }
-    return html;
+    return html+submissionReturnHistoryHtml(sub);
   }
   async function submissionAction(payload){
     var f=new Appwrite.Functions(window.fariqna.client);
@@ -2282,6 +2294,7 @@ loadRoomMessages();
       if(['pending','approved'].includes(existing.status)){toast('هذا التسليم قيد المراجعة أو معتمد');return;}
       openModal(existing.status==='returned'?'إعادة تسليم المهمة':'📤 تسليم المهمة',
         '<p class="muted">'+esc(task.title)+'</p>'+
+        submissionReturnHistoryHtml(existing)+
         '<label>ملخص الإنجاز (اختياري إذا أرفقت ملفًا)<textarea name="submissionText" rows="4" maxlength="2000" placeholder="ما الذي أنجزته؟"></textarea></label>'+
         '<label>📎 صورة حتى 20MB أو PDF حتى 50MB (اختياري إذا كتبت ملخصًا)<input name="submissionFile" type="file" accept=".jpg,.jpeg,.png,.webp,.gif,.pdf"></label>'+
         '<small class="muted">بعد التسليم، سيراجع المدير العمل ثم يعتمده أو يرجعه للتعديل.</small>',
@@ -2335,16 +2348,24 @@ loadRoomMessages();
         submissionTimelineHtml(task,sub,assigneeId)+
         '<p class="submission-note">'+esc(sub.text||'لا يوجد ملخص مكتوب')+'</p>'+
         (sub.attachmentId?'<button class="btn ghost small" type="button" data-submission-file-task="'+esc(task.id)+'" data-submission-file-user="'+esc(assigneeId)+'">📎 عرض ملف التسليم</button>':'')+
-        '<label>القرار<select name="decision" required><option value="approve">✅ اعتماد التسليم</option><option value="return">↩️ إرجاع للتعديل</option></select></label>',
+        '<label>القرار<select name="decision" required><option value="approve">✅ اعتماد التسليم</option><option value="return">↩️ إرجاع للتعديل</option></select></label>'+
+        '<label id="review-return-reason-row" class="hidden">سبب الإرجاع (إلزامي)<textarea name="reason" maxlength="1000" rows="4" disabled placeholder="وضّح للعضو ما يحتاج إلى تعديله"></textarea><small class="muted">سيظهر السبب للعضو المعني فقط مع تاريخ الإرجاع ووقته.</small></label>',
         async function(fd){
           var decision=String(fd.get('decision')||'');
           if(!['approve','return'].includes(decision))return;
+          var reason=decision==='return'?String(fd.get('reason')||'').trim():'';
+          if(decision==='return'&&(!reason||reason.length>1000)){toast('اكتب سبب الإرجاع من 1 إلى 1000 حرف');return;}
+          if(!me()||me().id!==user.id||state.spaceId!==task.spaceId||myMembership(state.spaceId)?.role!=='admin')return toast('انتهت صلاحية المراجعة، افتح التسليم مجددًا');
           var button=$('modal-form').querySelector('[type="submit"]');
           if(button.disabled)return;
           button.disabled=true;
           try{
-            var result=await submissionAction({action:'reviewTaskSubmission',taskId:task.id,assigneeId:assigneeId,decision:decision});
+            var payload={action:'reviewTaskSubmission',taskId:task.id,assigneeId:assigneeId,decision:decision};
+            if(decision==='return')payload.reason=reason;
+            var result=await submissionAction(payload);
+            if(!me()||me().id!==user.id||state.spaceId!==task.spaceId)return;
             task.submissions[assigneeId].status=result.submissionStatus;
+            if(Array.isArray(result.returnHistory))task.submissions[assigneeId].returnHistory=result.returnHistory;
             task.assigneeStatuses=task.assigneeStatuses||{};
             task.assigneeStatuses[assigneeId]=decision==='approve'?'done':'doing';
             task.status=result.status||task.status;
@@ -2357,6 +2378,14 @@ loadRoomMessages();
           finally{button.disabled=false;}
         }
       );
+      var reviewForm=$('modal-form'),decisionInput=reviewForm.elements.decision,reasonInput=reviewForm.elements.reason;
+      function syncReturnReason(){
+        var returning=decisionInput.value==='return';
+        $('review-return-reason-row').classList.toggle('hidden',!returning);
+        reasonInput.disabled=!returning;reasonInput.required=returning;
+      }
+      decisionInput.addEventListener('change',syncReturnReason);
+      syncReturnReason();
   }
 
   // المرفقات لا تفتح إلا بعد جلب رابط مؤقت من الخادم وبعد فحص صلاحيات المستخدم.
@@ -3603,9 +3632,11 @@ dueAt: dueAt
           var date=Date.parse(row.approvedAt);
           var dateText=Number.isFinite(date)?' • '+new Intl.DateTimeFormat('ar-SA-u-nu-latn',{year:'numeric',month:'short',day:'numeric'}).format(date):'';
           var wasLate=wasApprovedLate(row);
-          card('✅ '+(row.taskTitle||'مهمة'),wasLate===true?'🔴 متأخرة ومعتمدة':'معتمدة',
+          var approvedCard=card('✅ '+(row.taskTitle||'مهمة'),wasLate===true?'🔴 متأخرة ومعتمدة':'معتمدة',
             'المكافأة: '+(row.reward||'بدون مكافأة')+dateText+
             (wasLate===true?' • سُلّمت بعد الموعد':wasLate===false?' • سُلّمت في الوقت أو بلا موعد':''));
+          var assignedTask=mine.find(function(t){return t.id===row.taskId;});
+          if(assignedTask)approvedCard.insertAdjacentHTML('beforeend',submissionReturnHistoryHtml(assignedTask.submissions&&assignedTask.submissions[viewer.id]));
         });
       }
       var lateTitle=document.createElement('h3');
