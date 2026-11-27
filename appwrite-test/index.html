@@ -2349,7 +2349,7 @@ loadRoomMessages();
         '<p class="submission-note">'+esc(sub.text||'لا يوجد ملخص مكتوب')+'</p>'+
         (sub.attachmentId?'<button class="btn ghost small" type="button" data-submission-file-task="'+esc(task.id)+'" data-submission-file-user="'+esc(assigneeId)+'">📎 عرض ملف التسليم</button>':'')+
         '<label>القرار<select name="decision" required><option value="approve">✅ اعتماد التسليم</option><option value="return">↩️ إرجاع للتعديل</option></select></label>'+
-        '<label id="review-return-reason-row" class="hidden">سبب الإرجاع (إلزامي)<textarea name="reason" maxlength="1000" rows="4" disabled placeholder="وضّح للعضو ما يحتاج إلى تعديله"></textarea><small class="muted">سيظهر السبب للعضو المعني فقط مع تاريخ الإرجاع ووقته.</small></label>',
+        '<label id="review-return-reason-row">سبب الإرجاع (إلزامي عند الإرجاع فقط)<textarea id="review-return-reason" name="reason" maxlength="1000" rows="3" placeholder="وضّح للعضو ما يحتاج إلى تعديله"></textarea><small class="muted">عند الاعتماد اترك السبب فارغًا. عند الإرجاع سيظهر للعضو المعني فقط مع التاريخ والوقت.</small></label>',
         async function(fd){
           var decision=String(fd.get('decision')||'');
           if(!['approve','return'].includes(decision))return;
@@ -2378,11 +2378,9 @@ loadRoomMessages();
           finally{button.disabled=false;}
         }
       );
-      var reviewForm=$('modal-form'),decisionInput=reviewForm.elements.decision,reasonInput=reviewForm.elements.reason;
+      var reviewForm=$('modal-form'),decisionInput=reviewForm.querySelector('select[name="decision"]'),reasonInput=$('review-return-reason');
       function syncReturnReason(){
-        var returning=decisionInput.value==='return';
-        $('review-return-reason-row').classList.toggle('hidden',!returning);
-        reasonInput.disabled=!returning;reasonInput.required=returning;
+        reasonInput.required=decisionInput.value==='return';
       }
       decisionInput.addEventListener('change',syncReturnReason);
       syncReturnReason();
