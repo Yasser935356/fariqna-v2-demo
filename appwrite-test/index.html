@@ -3981,7 +3981,13 @@ function appendChatBubble(box, msg, workspaceId, taskId) {
   name.textContent = sender ? sender.name : 'عضو';
   bubble.appendChild(name);
 
-  if (msg.attachmentId) {
+  if (msg.messageType === 'deleted') {
+    var removed = document.createElement('div');
+    removed.className = 'muted';
+    removed.style.fontStyle = 'italic';
+    removed.textContent = 'تم حذف الرسالة';
+    bubble.appendChild(removed);
+  } else if (msg.attachmentId) {
     // اسم الملف والتعليق وزر فتحه في فقاعة واحدة
     var fileName = document.createElement('div');
     fileName.textContent = '📎 ' + (msg.content || 'مرفق');
@@ -4021,7 +4027,63 @@ function appendChatBubble(box, msg, workspaceId, taskId) {
   time.textContent = Number.isNaN(date.getTime())
     ? '' : date.toLocaleString('ar-SA');
   bubble.appendChild(time);
+  if (msg.canDelete === true && msg.messageType !== 'deleted') {
+    var deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'btn ghost small';
+    deleteButton.style.display = 'block';
+    deleteButton.style.marginTop = '6px';
+    deleteButton.textContent = '🗑️ حذف';
+    deleteButton.setAttribute('aria-label', msg.attachmentId ? 'حذف الرسالة والمرفق' : 'حذف الرسالة');
+    deleteButton.addEventListener('click', function () {
+      deleteChatMessage(msg, workspaceId, taskId || '', deleteButton);
+    });
+    bubble.appendChild(deleteButton);
+  }
   box.appendChild(bubble);
+}
+
+// ---------- حذف الرسائل والمرفقات بعد التأكيد ----------
+var pendingChatDeletes = new Set();
+async function deleteChatMessage(msg, workspaceId, taskId, button) {
+  var viewer = me();
+  function current() {
+    return viewer && me() && me().id === viewer.id && state.view === 'space' &&
+      state.spaceId === workspaceId && (!taskId || (state.taskChatId === taskId &&
+      !$('task-chat-modal').classList.contains('hidden')));
+  }
+  if (!current() || !myMembership(workspaceId) || msg.canDelete !== true ||
+      msg.messageType === 'deleted' || pendingChatDeletes.has(msg.id)) return;
+  var question = msg.attachmentId
+    ? 'هل تريد حذف هذه الرسالة ومرفقها نهائيًا؟ لا يمكن استعادتهما.'
+    : 'هل تريد حذف هذه الرسالة نهائيًا؟ لا يمكن استعادتها.';
+  if (!window.confirm(question)) return;
+  if (!current()) return;
+  pendingChatDeletes.add(msg.id);
+  button.disabled = true;
+  try {
+    await submissionAction({action:'deleteMessage',workspaceId:workspaceId,
+      taskId:taskId,messageId:msg.id,confirmed:true});
+    if (!current()) return;
+    var box = $(taskId ? 'task-chat-messages' : 'room-messages');
+    delete box.dataset.signature;
+    // استبدال الفقاعة فورًا، ثم إعادة مزامنة المحادثة من الخادم.
+    var bubble = button.closest('.chat-bubble');
+    if (bubble && box.contains(bubble)) {
+      var tmp = document.createElement('div');
+      appendChatBubble(tmp,Object.assign({},msg,{messageType:'deleted',content:'تم حذف الرسالة',
+        caption:'',attachmentId:null,canDelete:false}),workspaceId,taskId);
+      bubble.replaceWith(tmp.firstChild);
+    }
+    toast('✅ تم حذف الرسالة');
+    if (taskId) await loadTaskMessages(true);
+    else await loadRoomMessages(true);
+  } catch (err) {
+    if (current()) toast('تعذر حذف الرسالة: '+String(err.message||err));
+  } finally {
+    pendingChatDeletes.delete(msg.id);
+    button.disabled = false;
+  }
 }
 
 // ---------- تحميل رسائل المحادثة العامة ----------
@@ -4046,7 +4108,7 @@ async function loadRoomMessages(silent) {
     }
     if(state.spaceId!==workspaceId||state.view!=='space'||!me()||me().id!==viewerId)return;
     showChatMuteNotice('room',result.mutes);
-    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId];}));
+    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
     var previousScroll=box.scrollTop;
@@ -4126,7 +4188,7 @@ async function loadTaskMessages(silent) {
     }
     if(state.taskChatId!==taskId||state.spaceId!==workspaceId||$('task-chat-modal').classList.contains('hidden')||!me()||me().id!==viewerId)return;
     showChatMuteNotice('task',result.mutes);
-    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId];}));
+    var signature=JSON.stringify(result.messages.map(function(m){return [m.id,m.content,m.caption,m.attachmentId,m.messageType,m.canDelete];}));
     if(silent&&box.dataset.signature===signature)return;
     var stickToBottom=(!silent)||box.scrollHeight-box.scrollTop-box.clientHeight<85;
     var previousScroll=box.scrollTop;
